@@ -1,0 +1,732 @@
+---
+title: ""
+author: "Matt Coelho"
+date: "15/09/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#libraries
+library(dplyr)
+library(readr)
+library(tidyverse)
+library(ggfortify)
+library(reshape2)
+library(ggrepel)
+library(stringr)
+library(ggpointdensity)
+library(pheatmap)
+library(RColorBrewer)
+library(purrr)
+```
+
+```{r}
+# define functions
+RPM <- function(x) ((x/sum(x) *1000000) + 1)
+average <- function(x,y) ((x + y) /2)
+L2FC <- function(x,y) (log2(x/y))
+zscore <- function(x) ((x-mean(x))/sd(x))
+```
+
+```{r}
+# Define the correct folder path
+input_dir <- "./A427_Cas9"
+
+# List all read_count.tsv files in the directory
+files <- list.files(input_dir, pattern = "read_count.tsv$", full.names = TRUE)
+
+# Check if files exist
+if (length(files) == 0) {
+  stop("No files found! Check the directory path and file names.")
+}
+
+# Read the first file
+file <- files[1]
+raw_reads <- read_tsv(file, col_types = cols()) %>%
+  rename_with(~ gsub(".*/|\\.tsv", "", file), -c(sgRNA, gene)) %>%  # Replace column name with filename
+  rename(gene = gene, sgRNA = sgRNA)  # Keep original names for reference columns
+
+# Iterate over remaining files and perform left joins
+for (file in files[-1]) {
+  temp_df <- read_tsv(file, col_types = cols()) %>%
+    select(-gene) %>%  # Remove the redundant "gene" column
+    rename_with(~ gsub(".*/|\\.tsv", "", file), -sgRNA)  # Replace column name with filename
+  
+  # Ensure sgRNA column exists
+  if (!"sgRNA" %in% colnames(temp_df)) {
+    stop(paste("Missing 'sgRNA' column in:", file))
+  }
+
+  raw_reads <- left_join(raw_reads, temp_df, by = "sgRNA")
+}
+
+# Print the merged dataframe
+print(raw_reads)
+```
+
+```{r}
+# gRNA sequences
+seqs <- as_tibble(read.delim("MinLib109GL.txt", stringsAsFactors = FALSE, header = TRUE, sep =","))
+
+raw_reads
+seqs
+seqs <- seqs %>%
+  mutate(sgRNA = str_sub(sgRNA, 1, -3)) %>%
+  select(-c(chr, start, end))
+
+data <- left_join(raw_reads, seqs)
+data
+```
+
+```{r}
+#read count filtering > 50 in plasmid (13 gRNAs)
+
+data %>%
+  filter(plasmid_minlib_v1.read_count < 50)
+
+data <-
+data %>%
+  filter(plasmid_minlib_v1.read_count > 50)
+```
+
+```{r}
+# compute average reads
+# cell line average
+
+data <- mutate(data, A427Cas9_T0_average.read_count = average(A427Cas9_T0_R1.read_count, A427Cas9_T0_R2.read_count))
+data <- mutate(data, A427Cas9_Control_average.read_count = average(A427Cas9_Control_R1.read_count, A427Cas9_Control_R1.read_count))
+data <- mutate(data, A427Cas9_ACBI3_average.read_count = average(A427Cas9_ACBI3_R1.read_count, A427Cas9_ACBI3_R2.read_count))
+data <- mutate(data, A427Cas9_BI2865_average.read_count = average(A427Cas9_BI2865_R1.read_count, A427Cas9_BI2865_R2.read_count))
+data <- mutate(data, A427Cas9_MRTX1133_average.read_count = average(A427Cas9_MRTX1133_R1.read_count, A427Cas9_MRTX1133_R2.read_count))
+data <- mutate(data, A427Cas9_RMC6236_average.read_count = average(A427Cas9_RMC6236_R1.read_count, A427Cas9_RMC6236_R2.read_count))
+```
+
+```{r}
+#compute RPM values
+data <- mutate_at(data, vars(matches("read_count")), list(RPM = RPM))
+```
+
+```{r}
+# compute L2FC from normalised gRNA counts
+#  exp 1 (Control comparison)
+
+data <- mutate(data, L2FC_A427_CTRL_plasmid_exp1 = L2FC(A427Cas9_Control_R1.read_count_RPM, plasmid_minlib_v1.read_count_RPM))
+data <- mutate(data, L2FC_A427_CTRL_T0_exp1 = L2FC(A427Cas9_Control_R1.read_count_RPM, A427Cas9_T0_R1.read_count_RPM))
+data <- mutate(data, L2FC_A427_ACBI3_CTRL_exp1 = L2FC(A427Cas9_ACBI3_R1.read_count_RPM, A427Cas9_Control_R1.read_count_RPM))
+data <- mutate(data, L2FC_A427_MRTX1133_CTRL_exp1 = L2FC(A427Cas9_MRTX1133_R1.read_count_RPM, A427Cas9_Control_R1.read_count_RPM))
+data <- mutate(data, L2FC_A427_BI2865_CTRL_exp1 = L2FC(A427Cas9_BI2865_R1.read_count_RPM, A427Cas9_Control_R1.read_count_RPM))
+data <- mutate(data, L2FC_A427_RMC6236_CTRL_exp1 = L2FC(A427Cas9_RMC6236_R1.read_count_RPM, A427Cas9_Control_R1.read_count_RPM))
+```
+
+```{r}
+# compute L2FC from normalised gRNA counts
+#  exp 2 (Control comparison)
+
+data <- mutate(data, L2FC_A427_CTRL_plasmid_exp2 = L2FC(A427Cas9_Control_R2.read_count_RPM, plasmid_minlib_v1.read_count_RPM))
+data <- mutate(data, L2FC_A427_CTRL_T0_exp2 = L2FC(A427Cas9_Control_R2.read_count_RPM, A427Cas9_T0_R2.read_count_RPM))
+data <- mutate(data, L2FC_A427_ACBI3_CTRL_exp2 = L2FC(A427Cas9_ACBI3_R2.read_count_RPM, A427Cas9_Control_R2.read_count_RPM))
+data <- mutate(data, L2FC_A427_MRTX1133_CTRL_exp2 = L2FC(A427Cas9_MRTX1133_R2.read_count_RPM, A427Cas9_Control_R2.read_count_RPM))
+data <- mutate(data, L2FC_A427_BI2865_CTRL_exp2 = L2FC(A427Cas9_BI2865_R2.read_count_RPM, A427Cas9_Control_R2.read_count_RPM))
+data <- mutate(data, L2FC_A427_RMC6236_CTRL_exp2 = L2FC(A427Cas9_RMC6236_R2.read_count_RPM, A427Cas9_Control_R2.read_count_RPM))
+```
+
+```{r}
+# compute L2FC from normalised gRNA counts
+#  average (Control comparison)
+
+data <- mutate(data, L2FC_A427_CTRL_plasmid_average = L2FC(A427Cas9_Control_average.read_count_RPM, plasmid_minlib_v1.read_count_RPM))
+data <- mutate(data, L2FC_A427_CTRL_T0_average = L2FC(A427Cas9_Control_average.read_count_RPM, A427Cas9_T0_average.read_count_RPM))
+data <- mutate(data, L2FC_A427_ACBI3_CTRL_average = L2FC(A427Cas9_ACBI3_average.read_count_RPM, A427Cas9_Control_average.read_count_RPM))
+data <- mutate(data, L2FC_A427_MRTX1133_CTRL_average = L2FC(A427Cas9_MRTX1133_average.read_count_RPM, A427Cas9_Control_average.read_count_RPM))
+data <- mutate(data, L2FC_A427_BI2865_CTRL_average = L2FC(A427Cas9_BI2865_average.read_count_RPM, A427Cas9_Control_average.read_count_RPM))
+data <- mutate(data, L2FC_A427_RMC6236_CTRL_average = L2FC(A427Cas9_RMC6236_average.read_count_RPM, A427Cas9_Control_average.read_count_RPM))
+
+data <- mutate(data, L2FC_A427_ACBI3_plasmid_average = L2FC(A427Cas9_ACBI3_average.read_count_RPM, plasmid_minlib_v1.read_count_RPM))
+data <- mutate(data, L2FC_A427_MRTX1133_plasmid_average = L2FC(A427Cas9_MRTX1133_average.read_count_RPM, plasmid_minlib_v1.read_count_RPM))
+data <- mutate(data, L2FC_A427_BI2865_plasmid_average = L2FC(A427Cas9_BI2865_average.read_count_RPM, plasmid_minlib_v1.read_count_RPM))
+data <- mutate(data, L2FC_A427_RMC6236_plasmid_average = L2FC(A427Cas9_RMC6236_average.read_count_RPM, plasmid_minlib_v1.read_count_RPM))
+```
+
+```{r}
+# from L2FC, define z-scores
+# define function
+zscore <- function(x) ((x-mean(x))/sd(x))
+data <- mutate_at(data, vars(matches("L2FC")), list(zscore = zscore))
+```
+
+```{r}
+# define plot jitter
+pos <- position_jitter(seed = 2, width = 0.2, height = 0.2)
+```
+
+```{r}
+# dot plots _ proliferation CTRL
+plot1 <- ggplot(subset(data), aes(x= L2FC_A427_CTRL_plasmid_average_zscore , y= L2FC_A427_ACBI3_CTRL_average_zscore)) + 
+geom_pointdensity(position = pos, alpha = 1, size =3) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+scale_shape_manual(values =c(19, 1)) +
+theme_classic()
+plot1
+
+plot2 <- ggplot(subset(data), aes(x= L2FC_A427_CTRL_plasmid_average_zscore , y= L2FC_A427_MRTX1133_CTRL_average_zscore)) + 
+geom_pointdensity(position = pos, alpha = 1, size =3) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+scale_shape_manual(values =c(19, 1)) +
+theme_classic()
+plot2
+
+plot3 <- ggplot(subset(data), aes(x= L2FC_A427_CTRL_plasmid_average_zscore , y= L2FC_A427_RMC6236_CTRL_average_zscore)) + 
+geom_pointdensity(position = pos, alpha = 1, size =3) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+scale_shape_manual(values =c(19, 1)) +
+theme_classic()
+plot3
+
+plot4 <- ggplot(subset(data), aes(x= L2FC_A427_CTRL_plasmid_average_zscore , y= L2FC_A427_BI2865_CTRL_average_zscore)) + 
+geom_pointdensity(position = pos, alpha = 1, size =3) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+scale_shape_manual(values =c(19, 1)) +
+theme_classic()
+plot4
+```
+
+```{r}
+# dot plots _ proliferation plasmid
+
+pos <- position_jitter(seed = 2, width = 0.2, height = 0.2)
+
+plot1 <- ggplot(subset(data), aes(x= L2FC_A427_CTRL_plasmid_average_zscore , y= L2FC_A427_ACBI3_plasmid_average_zscore)) + 
+geom_pointdensity(position = pos, alpha = 1, size =3) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+scale_shape_manual(values =c(19, 1)) +
+geom_text_repel(aes(label=ifelse(L2FC_A427_ACBI3_plasmid_average_zscore > 3 & L2FC_A427_CTRL_plasmid_average_zscore < 3, gene, "")), size=3, position=pos, max.overlaps = Inf) +
+theme_classic()
+plot1
+
+plot2 <- ggplot(subset(data), aes(x= L2FC_A427_CTRL_plasmid_average_zscore , y= L2FC_A427_MRTX1133_plasmid_average_zscore)) + 
+geom_pointdensity(position = pos, alpha = 1, size =3) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+scale_shape_manual(values =c(19, 1)) +
+geom_text_repel(aes(label=ifelse(L2FC_A427_MRTX1133_plasmid_average_zscore > 3 & L2FC_A427_CTRL_plasmid_average_zscore < 3, gene, "")), size=3, position=pos, max.overlaps = Inf) +
+theme_classic()
+plot2
+
+plot3 <- ggplot(subset(data), aes(x= L2FC_A427_CTRL_plasmid_average_zscore , y= L2FC_A427_RMC6236_plasmid_average_zscore)) + 
+geom_pointdensity(position = pos, alpha = 1, size =3) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+scale_shape_manual(values =c(19, 1)) +
+geom_text_repel(aes(label=ifelse(L2FC_A427_RMC6236_plasmid_average_zscore > 3 & L2FC_A427_CTRL_plasmid_average_zscore < 3, gene, "")), size=3, position=pos, max.overlaps = Inf) +
+theme_classic()
+plot3
+
+plot4 <- ggplot(subset(data), aes(x= L2FC_A427_CTRL_plasmid_average_zscore , y= L2FC_A427_BI2865_plasmid_average_zscore)) + 
+geom_pointdensity(position = pos, alpha = 1, size =3) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+scale_shape_manual(values =c(19, 1)) +
+geom_text_repel(aes(label=ifelse(L2FC_A427_BI2865_plasmid_average_zscore > 3 & L2FC_A427_CTRL_plasmid_average_zscore < 3, gene, "")), size=3, position=pos, max.overlaps = Inf) +
+theme_classic()
+plot4
+```
+
+```{r}
+# dot plots _ proliferation 
+
+plot1 <- ggplot(subset(data), aes(x= L2FC_A427_CTRL_plasmid_exp1_zscore , y= L2FC_A427_CTRL_plasmid_exp2_zscore)) + 
+geom_pointdensity(position = pos, alpha = 1, size =3) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+scale_shape_manual(values =c(19, 1)) +
+      geom_text_repel(aes(label=ifelse(L2FC_A427_CTRL_plasmid_exp1_zscore > 3 & L2FC_A427_CTRL_plasmid_exp2_zscore > 3 | L2FC_A427_CTRL_plasmid_exp1_zscore < -5  & L2FC_A427_CTRL_plasmid_exp2_zscore < -5, gene, "")), size=3, position=pos, max.overlaps = Inf) +
+theme_classic()
+plot1
+
+plot2 <- ggplot(subset(data), aes(x= L2FC_A427_CTRL_T0_exp1_zscore , y= L2FC_A427_CTRL_T0_exp2_zscore)) + 
+geom_pointdensity(position = pos, alpha = 1, size =3) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+scale_shape_manual(values =c(19, 1)) +
+      geom_text_repel(aes(label=ifelse(L2FC_A427_CTRL_plasmid_exp1_zscore > 3 & L2FC_A427_CTRL_plasmid_exp2_zscore > 3 | L2FC_A427_CTRL_plasmid_exp1_zscore < -5  & L2FC_A427_CTRL_plasmid_exp2_zscore < -5, gene, "")), size=3, position=pos, max.overlaps = Inf) +
+theme_classic()
+plot2
+
+plot3 <- ggplot(subset(data), aes(x= L2FC_A427_MRTX1133_CTRL_exp1_zscore , y= L2FC_A427_MRTX1133_CTRL_exp2_zscore)) + 
+geom_pointdensity(position = pos, alpha = 1, size =3) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+scale_shape_manual(values =c(19, 1)) +
+    geom_text_repel(aes(label=ifelse(L2FC_A427_MRTX1133_CTRL_exp1_zscore > 2.5 & L2FC_A427_MRTX1133_CTRL_exp2_zscore > 2.5 | L2FC_A427_MRTX1133_CTRL_exp1_zscore < -2.5  & L2FC_A427_MRTX1133_CTRL_exp2_zscore < -2.5, gene, "")), size=3, position=pos, max.overlaps = Inf) +
+theme_classic()
+plot3
+
+plot4 <- ggplot(subset(data), aes(x= L2FC_A427_RMC6236_CTRL_exp1_zscore , y= L2FC_A427_RMC6236_CTRL_exp2_zscore)) + 
+geom_pointdensity(position = pos, alpha = 1, size =3) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+scale_shape_manual(values =c(19, 1)) +
+    geom_text_repel(aes(label=ifelse(L2FC_A427_RMC6236_CTRL_exp1_zscore > 2.5 & L2FC_A427_RMC6236_CTRL_exp2_zscore > 2.5 | L2FC_A427_RMC6236_CTRL_exp1_zscore < -2.5  & L2FC_A427_RMC6236_CTRL_exp2_zscore < -2.5, gene, "")), size=3, position=pos, max.overlaps = Inf) +
+theme_classic()
+plot4
+
+plot5 <- ggplot(subset(data), aes(x= L2FC_A427_BI2865_CTRL_exp1_zscore , y= L2FC_A427_BI2865_CTRL_exp2_zscore)) + 
+geom_pointdensity(position = pos, alpha = 1, size =3) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+scale_shape_manual(values =c(19, 1)) +
+    geom_text_repel(aes(label=ifelse(L2FC_A427_BI2865_CTRL_exp1_zscore > 2.5 & L2FC_A427_BI2865_CTRL_exp2_zscore > 2.5 | L2FC_A427_BI2865_CTRL_exp1_zscore < -2.5  & L2FC_A427_BI2865_CTRL_exp2_zscore < -2.5, gene, "")), size=3, position=pos, max.overlaps = Inf) +
+theme_classic()
+plot5
+
+plot6 <- ggplot(subset(data), aes(x= L2FC_A427_ACBI3_CTRL_exp1_zscore , y= L2FC_A427_ACBI3_CTRL_exp2_zscore)) + 
+geom_pointdensity(position = pos, alpha = 1, size =3) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+scale_shape_manual(values =c(19, 1)) +
+  geom_text_repel(aes(label=ifelse(L2FC_A427_ACBI3_CTRL_exp1_zscore > 2.5 & L2FC_A427_ACBI3_CTRL_exp2_zscore > 2.5 | L2FC_A427_ACBI3_CTRL_exp1_zscore < -2.5  & L2FC_A427_ACBI3_CTRL_exp2_zscore < -2.5 | gene == "ILK", gene, "")), size=3, position=pos, max.overlaps = Inf) +
+theme_classic()
+plot6
+```
+
+```{r}
+#read in MAGeCK results
+
+# Define the correct folder path
+input_dir <- "./MAGeCK/results/MAGeCK/AVERAGE"
+
+# List all read_count.tsv files in the directory
+files <- list.files(input_dir, pattern = "_average.gene_summary.txt$", full.names = TRUE)
+
+MAGeCK_A3BI3 <- 
+  as_tibble(read.delim("./MAGeCK/results/MAGeCK/AVERAGE/A427Cas9_Control_vs_A427Cas9_A3BI3_average.gene_summary.txt", stringsAsFactors = FALSE, header = TRUE, sep ="\t"))
+
+MAGeCK_RMC6236 <- 
+  as_tibble(read.delim("./MAGeCK/results/MAGeCK/AVERAGE/A427Cas9_Control_vs_A427Cas9_RMC6236_average.gene_summary.txt", stringsAsFactors = FALSE, header = TRUE, sep ="\t"))
+
+MAGeCK_MRTX113 <- 
+  as_tibble(read.delim("./MAGeCK/results/MAGeCK/AVERAGE/A427Cas9_Control_vs_A427Cas9_MRTX1133_average.gene_summary.txt", stringsAsFactors = FALSE, header = TRUE, sep ="\t"))
+
+MAGeCK_BI2865 <- 
+  as_tibble(read.delim("./MAGeCK/results/MAGeCK/AVERAGE/A427Cas9_Control_vs_A427Cas9_BI2865_average.gene_summary.txt", stringsAsFactors = FALSE, header = TRUE, sep ="\t"))
+
+MAGeCK_Control_T0 <- 
+  as_tibble(read.delim("./MAGeCK/results/MAGeCK/AVERAGE/A427Cas9_T0_vs_A427Cas9_Control_average.gene_summary.txt", stringsAsFactors = FALSE, header = TRUE, sep ="\t"))
+
+MAGeCK_Control_plasmid <- 
+  as_tibble(read.delim("./MAGeCK/results/MAGeCK/AVERAGE/A427Cas9_plasmid_vs_A427Cas9_Control_average.gene_summary.txt", stringsAsFactors = FALSE, header = TRUE, sep ="\t"))
+```
+
+```{r}
+#wrangling MAGeCK dataframes - significance BI2865
+MAGeCK_BI2865 <- dplyr::rename(MAGeCK_BI2865, gene = id)
+MAGeCK_BI2865 <- mutate(MAGeCK_BI2865, pvalue = ifelse(neg.lfc< 0, neg.p.value, pos.p.value))
+MAGeCK_BI2865 <- mutate(MAGeCK_BI2865, fdr = ifelse(neg.lfc< 0, neg.fdr, pos.fdr))
+MAGeCK_BI2865 <- mutate(MAGeCK_BI2865, neg_log_10_p = (-1*log10(pvalue)))
+MAGeCK_BI2865 <- mutate(MAGeCK_BI2865, legend = ifelse(neg.lfc>0 & pvalue <0.05 & fdr <0.1, "enriched", ifelse(neg.lfc<0 & pvalue <0.05 & fdr <0.1, "depleted", "not significant")))
+MAGeCK_BI2865 <- mutate(MAGeCK_BI2865, rank = rank(neg.lfc))
+```
+
+```{r}
+#volcano plot BI2865
+plot1 <- ggplot(subset(MAGeCK_BI2865), aes(x=neg.lfc, y= neg_log_10_p, size = fdr, colour = legend)) +
+geom_point(shape =1) +
+geom_text_repel(aes(label=ifelse(neg.lfc > 2 & neg_log_10_p > 5 |  legend == "depleted" & neg.lfc < -2 | legend != "not significant" & neg_log_10_p > 4 |  gene %in% c("ILK", "NF1", "FGFR1"), gene, "")), size=3, colour =  "black", max.overlaps = Inf) +
+theme_classic() +
+scale_colour_manual(values=c("red", "blue", "grey70"), na.value="grey80") +
+    scale_size(transform = "reverse", range = c(0.1,3.5) ) +
+       labs(color = "", size = "FDR") +labs(title= "") + xlab("Log2 fold change") + ylab("-Log10 (P-value)")
+plot1
+```
+
+```{r}
+#wrangling MAGeCK dataframes - significance MRTX113
+MAGeCK_MRTX113 <- dplyr::rename(MAGeCK_MRTX113, gene = id)
+MAGeCK_MRTX113 <- mutate(MAGeCK_MRTX113, pvalue = ifelse(neg.lfc< 0, neg.p.value, pos.p.value))
+MAGeCK_MRTX113 <- mutate(MAGeCK_MRTX113, fdr = ifelse(neg.lfc< 0, neg.fdr, pos.fdr))
+MAGeCK_MRTX113 <- mutate(MAGeCK_MRTX113, neg_log_10_p = (-1*log10(pvalue)))
+MAGeCK_MRTX113 <- mutate(MAGeCK_MRTX113, legend = ifelse(neg.lfc>0 & pvalue <0.05 & fdr <0.1, "enriched", ifelse(neg.lfc<0 & pvalue <0.05 & fdr <0.1, "depleted", "not significant")))
+MAGeCK_MRTX113 <- mutate(MAGeCK_MRTX113, rank = rank(neg.lfc))
+```
+
+```{r}
+#volcano plot MRTX113
+plot1 <- ggplot(subset(MAGeCK_MRTX113), aes(x=neg.lfc, y= neg_log_10_p, size = fdr, colour = legend)) +
+geom_point(shape =1) +
+geom_text_repel(aes(label=ifelse(neg.lfc > 2 & neg_log_10_p > 5 |  legend == "depleted" & neg.lfc < -2 | legend != "not significant" & neg_log_10_p > 4 | gene %in% c("ILK", "NF1", "FGFR1"), gene, "")), size=3, colour =  "black", max.overlaps = Inf) +
+theme_classic() +
+scale_colour_manual(values=c("red", "blue", "grey70"), na.value="grey80") +
+    scale_size(transform = "reverse", range = c(0.1,3.5) ) +
+       labs(color = "", size = "FDR") +labs(title= "") + xlab("Log2 fold change") + ylab("-Log10 (P-value)")
+plot1
+```
+
+```{r}
+#wrangling MAGeCK dataframes - significance RMC6236
+MAGeCK_RMC6236 <- dplyr::rename(MAGeCK_RMC6236, gene = id)
+MAGeCK_RMC6236 <- mutate(MAGeCK_RMC6236, pvalue = ifelse(neg.lfc< 0, neg.p.value, pos.p.value))
+MAGeCK_RMC6236 <- mutate(MAGeCK_RMC6236, fdr = ifelse(neg.lfc< 0, neg.fdr, pos.fdr))
+MAGeCK_RMC6236 <- mutate(MAGeCK_RMC6236, neg_log_10_p = (-1*log10(pvalue)))
+MAGeCK_RMC6236 <- mutate(MAGeCK_RMC6236, legend = ifelse(neg.lfc>0 & pvalue <0.05 & fdr <0.1, "enriched", ifelse(neg.lfc<0 & pvalue <0.05 & fdr <0.1, "depleted", "not significant")))
+MAGeCK_RMC6236 <- mutate(MAGeCK_RMC6236, rank = rank(neg.lfc))
+```
+
+```{r}
+#volcano plot RMC6236
+plot1 <- ggplot(subset(MAGeCK_RMC6236), aes(x=neg.lfc, y= neg_log_10_p, size = fdr, colour = legend)) +
+geom_point(shape =1) +
+geom_text_repel(aes(label=ifelse(neg.lfc > 2 & neg_log_10_p > 5 |  legend == "depleted" & neg.lfc < -2 | legend != "not significant" & neg_log_10_p > 4 |  gene %in% c("ILK", "NF1", "FGFR1"), gene, "")), size=3, colour =  "black", max.overlaps = Inf) +
+theme_classic() +
+scale_colour_manual(values=c("red", "blue", "grey70"), na.value="grey80") +
+    scale_size(transform = "reverse", range = c(0.1,3.5) ) +
+       labs(color = "", size = "FDR") +labs(title= "") + xlab("Log2 fold change") + ylab("-Log10 (P-value)")
+plot1
+```
+
+```{r}
+#wrangling MAGeCK dataframes - significance A3BI3
+MAGeCK_A3BI3 <- dplyr::rename(MAGeCK_A3BI3, gene = id)
+MAGeCK_A3BI3 <- mutate(MAGeCK_A3BI3, pvalue = ifelse(neg.lfc< 0, neg.p.value, pos.p.value))
+MAGeCK_A3BI3 <- mutate(MAGeCK_A3BI3, fdr = ifelse(neg.lfc< 0, neg.fdr, pos.fdr))
+MAGeCK_A3BI3 <- mutate(MAGeCK_A3BI3, neg_log_10_p = (-1*log10(pvalue)))
+MAGeCK_A3BI3 <- mutate(MAGeCK_A3BI3, legend = ifelse(neg.lfc>0 & pvalue <0.05 & fdr <0.1, "enriched", ifelse(neg.lfc<0 & pvalue <0.05 & fdr <0.1, "depleted", "not significant")))
+MAGeCK_A3BI3 <- mutate(MAGeCK_A3BI3, rank = rank(neg.lfc))
+```
+
+```{r}
+#volcano plot A3BI3
+plot1 <- ggplot(subset(MAGeCK_A3BI3), aes(x=neg.lfc, y= neg_log_10_p, size = fdr, colour = legend)) +
+geom_point(shape =1) +
+geom_text_repel(aes(label=ifelse(neg.lfc > 2 & neg_log_10_p > 5 |  legend == "depleted" & neg.lfc < -2 | legend != "not significant" & neg_log_10_p > 4 |  gene %in% c("ILK", "NF1", "FGFR1"), gene, "")), size=3, colour =  "black", max.overlaps = Inf) +
+theme_classic() +
+scale_colour_manual(values=c("red", "blue", "grey70"), na.value="grey80") +
+    scale_size(transform = "reverse", range = c(0.1,3.5) ) +
+       labs(color = "", size = "FDR") +labs(title= "") + xlab("Log2 fold change") + ylab("-Log10 (P-value)")
+plot1
+```
+
+```{r}
+#wrangling MAGeCK dataframes - significance CTRL
+MAGeCK_Control_plasmid <- dplyr::rename(MAGeCK_Control_plasmid, gene = id)
+MAGeCK_Control_plasmid <- mutate(MAGeCK_Control_plasmid, pvalue = ifelse(neg.lfc< 0, neg.p.value, pos.p.value))
+MAGeCK_Control_plasmid <- mutate(MAGeCK_Control_plasmid, fdr = ifelse(neg.lfc< 0, neg.fdr, pos.fdr))
+MAGeCK_Control_plasmid <- mutate(MAGeCK_Control_plasmid, neg_log_10_p = (-1*log10(pvalue)))
+MAGeCK_Control_plasmid <- mutate(MAGeCK_Control_plasmid, legend = ifelse(neg.lfc>0 & pvalue <0.05 & fdr <0.1, "enriched", ifelse(neg.lfc<0 & pvalue <0.05 & fdr <0.1, "depleted", "not significant")))
+MAGeCK_Control_plasmid <- mutate(MAGeCK_Control_plasmid, rank = rank(neg.lfc))
+```
+
+```{r}
+#volcano plot CTRL
+plot1 <- ggplot(subset(MAGeCK_Control_plasmid), aes(x=neg.lfc, y= neg_log_10_p, size = fdr, colour = legend)) +
+geom_point(shape =1) +
+geom_text_repel(aes(label=ifelse(neg.lfc > 2 & neg_log_10_p > 5 |  legend == "depleted" & neg.lfc < -2 | legend != "not significant" & neg_log_10_p > 4 |  gene %in% c("ILK", "NF1", "FGFR1"), gene, "")), size=3, colour =  "black", max.overlaps = Inf) +
+theme_classic() +
+scale_colour_manual(values=c("red", "blue", "grey70"), na.value="grey80") +
+    scale_size(transform = "reverse", range = c(0.1,3.5) ) +
+       labs(color = "", size = "FDR") +labs(title= "") + xlab("Log2 fold change") + ylab("-Log10 (P-value)")
+plot1
+```
+```{r}
+#wrangling MAGeCK dataframes - significance T0
+MAGeCK_Control_T0 <- dplyr::rename(MAGeCK_Control_T0, gene = id)
+MAGeCK_Control_T0 <- mutate(MAGeCK_Control_T0, pvalue = ifelse(neg.lfc< 0, neg.p.value, pos.p.value))
+MAGeCK_Control_T0 <- mutate(MAGeCK_Control_T0, fdr = ifelse(neg.lfc< 0, neg.fdr, pos.fdr))
+MAGeCK_Control_T0 <- mutate(MAGeCK_Control_T0, neg_log_10_p = (-1*log10(pvalue)))
+MAGeCK_Control_T0 <- mutate(MAGeCK_Control_T0, legend = ifelse(neg.lfc>0 & pvalue <0.05 & fdr <0.1, "enriched", ifelse(neg.lfc<0 & pvalue <0.05 & fdr <0.1, "depleted", "not significant")))
+MAGeCK_Control_T0 <- mutate(MAGeCK_Control_T0, rank = rank(neg.lfc))
+```
+
+```{r}
+#volcano plot - T0
+plot1 <- ggplot(subset(MAGeCK_Control_T0), aes(x=neg.lfc, y= neg_log_10_p, size = fdr, colour = legend)) +
+geom_point(shape =1) +
+geom_text_repel(aes(label=ifelse(neg.lfc > 2 & neg_log_10_p > 5 |  legend == "depleted" & neg.lfc < -2 | legend != "not significant" & neg_log_10_p > 4 |  gene %in% c("ILK", "NF1", "FGFR1"), gene, "")), size=3, colour =  "black", max.overlaps = Inf) +
+theme_classic() +
+scale_colour_manual(values=c("red", "blue", "grey70"), na.value="grey80") +
+    scale_size(transform = "reverse", range = c(0.1,3.5) ) +
+       labs(color = "", size = "FDR") +labs(title= "") + xlab("Log2 fold change") + ylab("-Log10 (P-value)")
+plot1
+```
+
+```{r}
+#elbow plot
+plot1 <- ggplot(MAGeCK_A3BI3, aes(x=rank, y= neg.lfc, size = fdr)) +
+geom_point(shape = 1) +
+geom_text_repel(aes(label=ifelse(rank <5 | legend !="not significant" & rank > 18855, gene, "")), size=3, max.overlaps = Inf, colour = "red") +
+  theme_classic() +
+    scale_size(transform = "reverse", range = c(0.1,3) ) +
+labs(title= "") + xlab("gene rank") + ylab("log2 fold-change ACBI3 versus plasmid") +
+  labs(size = "FDR")
+plot1
+ggsave("Fig1a.1.eps", width = 3, height = 4, path ="./figures_export")
+```
+
+```{r}
+#elbow plot
+plot1 <- ggplot(MAGeCK_MRTX113, aes(x=rank, y= neg.lfc, size = fdr)) +
+geom_point(shape = 1) +
+geom_text_repel(aes(label=ifelse(rank <5 | legend !="not significant" & rank > 18855, gene, "")), size=3, max.overlaps = Inf, colour = "red") +
+  theme_classic() +
+    scale_size(transform = "reverse", range = c(0.1,3) ) +
+labs(title= "") + xlab("gene rank") + ylab("log2 fold-change MRTX113 versus plasmid") +
+  labs(size = "FDR")
+plot1
+ggsave("Fig1a.2.eps", width = 3, height = 4, path ="./figures_export")
+```
+
+```{r}
+#elbow plot
+plot1 <- ggplot(MAGeCK_BI2865, aes(x=rank, y= neg.lfc, size = fdr)) +
+geom_point(shape = 1) +
+geom_text_repel(aes(label=ifelse(rank <5 | legend !="not significant" & rank > 18855, gene, "")), size=3, max.overlaps = Inf, colour = "red") +
+  theme_classic() +
+    scale_size(transform = "reverse", range = c(0.1,3) ) +
+labs(title= "") + xlab("gene rank") + ylab("log2 fold-change BI-2865 versus plasmid") +
+    labs(size = "FDR")
+plot1
+ggsave("Fig1a.3.eps", width = 3, height = 4, path ="./figures_export")
+```
+
+```{r}
+#elbow plot
+plot1 <- ggplot(MAGeCK_RMC6236, aes(x=rank, y= neg.lfc, size = fdr)) +
+geom_point( shape = 1) +
+geom_text_repel(aes(label=ifelse(rank <5 | legend !="not significant" & rank > 18855, gene, "")), size=3, max.overlaps = Inf, colour = "red") +
+  theme_classic() +
+    scale_size(transform = "reverse", range = c(0.1,3) ) +
+labs(title= "") + xlab("gene rank") + ylab("log2 fold-change RMC-6236 versus plasmid") +
+    labs(size = "FDR")
+plot1
+ggsave("Fig1a.4.eps", width = 3, height = 4, path ="./figures_export")
+```
+
+```{r}
+#join lfc tables together
+
+# List of tables
+tables <- list(MAGeCK_A3BI3 = MAGeCK_A3BI3, MAGeCK_MRTX113 = MAGeCK_MRTX113, MAGeCK_BI2865 = MAGeCK_BI2865, MAGeCK_RMC6236 = MAGeCK_RMC6236, MAGeCK_Control_plasmid = MAGeCK_Control_plasmid, MAGeCK_Control_T0 = MAGeCK_Control_T0)
+
+# Function to join tables with suffixes
+merged_df <- reduce(names(tables), function(df, name) {
+  if (is.null(df)) {
+    return(rename_with(tables[[name]], ~ paste0(., "_", name), -gene))
+  }
+  full_join(df, rename_with(tables[[name]], ~ paste0(., "_", name), -gene), by = "gene")
+}, .init = NULL)
+
+print(merged_df)
+```
+
+```{r}
+#hits
+hits <- 
+  merged_df %>%
+  filter(legend_MAGeCK_RMC6236 !="not significant" | legend_MAGeCK_BI2865 !="not significant" | legend_MAGeCK_A3BI3 !="not significant" | legend_MAGeCK_MRTX113 !="not significant") %>%
+  select(gene)
+```
+
+```{r}
+#dot plots
+plot1 <- ggplot(merged_df, aes(y=neg.lfc_MAGeCK_A3BI3, x= neg.lfc_MAGeCK_RMC6236)) +
+geom_point(shape = 1, size =1) +
+    scale_size(transform = "reverse", range = c(0.1,3) ) +
+labs(title= "") + ylab("log2 fold-change ACBI3 versus plasmid") + xlab("log2 fold-change RMC-6236 versus plasmid") +
+    geom_text_repel(aes(label=ifelse(gene %in% hits$gene, gene, "")), size=3, colour =  "red", max.overlaps = Inf) +
+    geom_hline(yintercept=c(0,0), linetype="dotted", colour = "grey45") +
+  geom_vline(xintercept=c(0,0), linetype="dotted", colour = "grey45") +
+  theme_classic()
+plot1
+ggsave("Fig1b.1.eps", width = 4, height = 4, path ="./figures_export")
+
+plot2 <- ggplot(merged_df, aes(x=neg.lfc_MAGeCK_BI2865, y= neg.lfc_MAGeCK_RMC6236)) +
+geom_point(shape = 1) +
+    scale_size(transform = "reverse", range = c(0.1,3) ) +
+labs(title= "") + xlab("neg.lfc_MAGeCK_A3BI3") + ylab("neg.lfc_MAGeCK_RMC6236") +
+      geom_text_repel(aes(label=ifelse(gene %in% hits$gene, gene, "")), size=3, colour =  "red", max.overlaps = Inf) +
+  geom_hline(yintercept=c(0,0), linetype="dotted", colour = "grey45") +
+  geom_vline(xintercept=c(0,0), linetype="dotted", colour = "grey45") +
+  theme_classic()
+plot2
+
+plot3 <- ggplot(merged_df, aes(x=neg.lfc_MAGeCK_MRTX113, y= neg.lfc_MAGeCK_RMC6236)) +
+geom_point(shape = 1) +
+    scale_size(transform = "reverse", range = c(0.1,3) ) +
+labs(title= "") + xlab("neg.lfc_MAGeCK_A3BI3") + ylab("neg.lfc_MAGeCK_MRTX113") +
+      geom_text_repel(aes(label=ifelse(gene %in% hits$gene, gene, "")), size=3, colour =  "red", max.overlaps = Inf) +
+  geom_hline(yintercept=c(0,0), linetype="dotted", colour = "grey45") +
+  geom_vline(xintercept=c(0,0), linetype="dotted", colour = "grey45") +
+  theme_classic()
+plot3
+
+plot4 <- ggplot(merged_df, aes(x=neg.lfc_MAGeCK_BI2865, y= neg.lfc_MAGeCK_MRTX113)) +
+geom_point(shape = 1) +
+    scale_size(transform = "reverse", range = c(0.1,3) ) +
+labs(title= "") + xlab("neg.lfc_MAGeCK_BI2865") + ylab("neg.lfc_MAGeCK_MRTX113") +
+      geom_text_repel(aes(label=ifelse(gene %in% hits$gene, gene, "")), size=3, colour =  "red", max.overlaps = Inf) +
+  geom_hline(yintercept=c(0,0), linetype="dotted", colour = "grey45") +
+  geom_vline(xintercept=c(0,0), linetype="dotted", colour = "grey45") +
+  theme_classic()
+plot4
+
+plot5 <- ggplot(merged_df, aes(x=neg.lfc_MAGeCK_A3BI3, y= neg.lfc_MAGeCK_MRTX113)) +
+geom_point(shape = 1) +
+    scale_size(transform = "reverse", range = c(0.1,3) ) +
+labs(title= "") + xlab("neg.lfc_MAGeCK_A3BI3") + ylab("neg.lfc_MAGeCK_MRTX113") +
+      geom_text_repel(aes(label=ifelse(gene %in% hits$gene, gene, "")), size=3, colour =  "red", max.overlaps = Inf) +
+  geom_hline(yintercept=c(0,0), linetype="dotted", colour = "grey45") +
+  geom_vline(xintercept=c(0,0), linetype="dotted", colour = "grey45") +
+  theme_classic()
+plot5
+
+plot6 <- ggplot(merged_df, aes(x=neg.lfc_MAGeCK_BI2865, y= neg.lfc_MAGeCK_A3BI3)) +
+geom_point(shape = 1) +
+    scale_size(transform = "reverse", range = c(0.1,3) ) +
+labs(title= "") + xlab("neg.lfc_MAGeCK_BI2865") + ylab("neg.lfc_MAGeCK_A3BI3") +
+    geom_text_repel(aes(label=ifelse(gene %in% hits$gene, gene, "")), size=3, colour =  "red", max.overlaps = Inf) +
+  geom_hline(yintercept=c(0,0), linetype="dotted", colour = "grey45") +
+  geom_vline(xintercept=c(0,0), linetype="dotted", colour = "grey45") +
+  theme_classic()
+plot6
+```
+
+```{r}
+#heatmap IFNg for key genes and lfc
+heat_map <-
+  merged_df %>%
+   filter(gene %in% c("PPIA", "VHL", "PTEN", "NF1", "FGFR1", "RPL22", "TSC2", "NPRL3")) %>%
+      select(contains(c("gene", "neg.lfc"))) %>%
+  select(!("neg.lfc_MAGeCK_Control_T0")) %>%
+  rename(control = neg.lfc_MAGeCK_Control_plasmid) %>%
+  rename(MRTX113 = neg.lfc_MAGeCK_MRTX113) %>%
+  rename(RMC6236 = neg.lfc_MAGeCK_RMC6236) %>%
+  rename(ACBI3 = neg.lfc_MAGeCK_A3BI3) %>%
+  rename(BI2865 = neg.lfc_MAGeCK_BI2865)
+
+df_numeric <- heat_map %>%
+  select(gene, everything()) %>%
+  drop_na() %>%
+  column_to_rownames("gene")  # Set gene column as row names
+
+# Convert to a matrix for pheatmap
+df_matrix <- as.matrix(df_numeric)
+
+# Define color palette
+color_palette <- rev(colorRampPalette(brewer.pal(11, "RdBu"))(100))
+
+# Define breaks centered at 0
+max_val <- max(abs(df_matrix))  # Get max absolute value
+breaks <- seq(-max_val, max_val, length.out = 101)  # Ensure 0 is in the center
+
+# Create heatmap with centered colors
+pheatmap(
+  df_matrix,
+  scale = "none",
+  clustering_distance_rows = "euclidean",
+  clustering_distance_cols = "euclidean",
+  clustering_method = "complete",
+  show_rownames = TRUE,  # Show gene names as row names
+  show_colnames = TRUE,
+  main = "",
+  color = color_palette,  
+  breaks = breaks,  # Ensure 0 is centered
+  border_color = NA,
+  filename = file.path("figures_export", "Fig1b.2.pdf"),  # or .png
+  width = 4, height = 4
+) 
+```
+
+```{r}
+# add a FORWARD guide column (reverse reverse complement for - strand seq)
+# add 5' G for non-G starting guides. You can use this to ORDER GUIDE libraries (add appropriate Gibson cloning adapters)
+
+# add a G for the expression from U6 promoter by replacing the base at pos. 1 if, it is not a G
+data <- mutate(data, G_guide = paste0("G", sequence))
+
+# primers
+# forward_primer
+data <- mutate(data, for_primer = paste0("CACC", G_guide))
+
+# reverse_primer
+data <- mutate(data, rev_primer = G_guide)
+data <- mutate(data, rev_primer = str_replace_all(rev_primer, "A", "t"))
+data <- mutate(data, rev_primer = str_replace_all(rev_primer, "T", "a"))
+data <- mutate(data, rev_primer = str_replace_all(rev_primer, "C", "g"))
+data <- mutate(data, rev_primer = str_replace_all(rev_primer, "G", "c"))
+data <- mutate(data, rev_primer = str_to_upper(rev_primer))
+
+data <- mutate(data, rev_primer = paste0(substr(rev_primer, 20, 20), substr(rev_primer, 19, 19),substr(rev_primer, 18, 18),substr(rev_primer, 17, 17),substr(rev_primer, 16, 16),substr(rev_primer, 15, 15), substr(rev_primer, 14, 14), substr(rev_primer, 13, 13), substr(rev_primer, 12, 12), substr(rev_primer, 11, 11), substr(rev_primer, 10, 10), substr(rev_primer, 9, 9), substr(rev_primer, 8, 8), substr(rev_primer, 7, 7), substr(rev_primer, 6, 6), substr(rev_primer, 5, 5), substr(rev_primer, 4, 4), substr(rev_primer, 3, 3), substr(rev_primer, 2, 2), substr(rev_primer, 1, 1)))
+
+data <- mutate(data, rev_primer = paste0("AAAC", rev_primer))
+data
+```
+
+```{r}
+# validation gRNAs
+# ILK, PTEN, FGFR1
+
+### NOTE 
+# the suggested VBC gRNAs for ILK based on rank or VBC score were in the last exons, so chose two that were in earlier exons.
+# strangely, the gRNA that did not score well from minlib in the screen did not map to the coding region. 
+
+#VBC
+VBC_lib <- 
+  as_tibble(read_csv("VBC_gRNA_lib_top6.csv"))
+
+VBC_lib %>%
+  filter(gene %in% c("ILK", "PTEN", "FGFR1", "CDK13")) %>%
+   group_by(gene) %>%  # Group by gene
+  slice_max(order_by = `VBC score`, n = 3) %>%  # Select the top 3 for each gene
+  ungroup()
+
+VBC_lib %>%
+  filter(gene %in% c("ILK"))
+
+VBC_lib %>%
+  filter(gene %in% c("ILK", "PTEN", "FGFR1", "CDK13")) %>%
+   group_by(gene) %>%  # Group by gene
+  slice_max(order_by = `VBC score`, n = 3) %>%  # Select the top 3 for each gene
+  ungroup() %>%
+  write.csv("valiation_gRNAs_VBC.csv")
+```
+
+```{r}
+# data
+# validation gRNAs
+# ILK, PTEN, FGFR1
+
+data %>%
+    filter(gene %in% c("ILK", "PTEN", "FGFR1", "CDK13", "PTPN11")) %>%
+  arrange(gene) %>%
+  select(gene, sgRNA, for_primer, rev_primer, G_guide, L2FC_A427_RMC6236_plasmid_average, L2FC_A427_MRTX1133_plasmid_average, L2FC_A427_BI2865_plasmid_average, L2FC_A427_ACBI3_plasmid_average, L2FC_A427_CTRL_plasmid_average, L2FC_A427_CTRL_T0_average)
+
+merged_df %>%
+    filter(gene %in% c("ILK", "PTEN", "FGFR1", "CDK13", "PTPN11")) %>%
+  select(gene, pos.lfc_MAGeCK_MRTX113, neg.lfc_MAGeCK_A3BI3, neg.lfc_MAGeCK_RMC6236, neg.lfc_MAGeCK_BI2865, neg.lfc_MAGeCK_Control_plasmid, neg.fdr_MAGeCK_Control_T0)
+
+data %>%
+    filter(gene %in% c("ILK", "PTEN", "FGFR1", "CDK13")) %>%
+  arrange(gene) %>%
+  select(gene, sgRNA, for_primer, rev_primer, G_guide, L2FC_A427_RMC6236_plasmid_average, L2FC_A427_MRTX1133_plasmid_average, L2FC_A427_BI2865_plasmid_average, L2FC_A427_ACBI3_plasmid_average) %>%
+    write.csv("valiation_gRNAs_MinLib.csv")
+```
+
+```{r}
+merged_df %>%
+  select(gene, pos.lfc_MAGeCK_A3BI3, pos.lfc_MAGeCK_RMC6236, pos.lfc_MAGeCK_MRTX113, pos.lfc_MAGeCK_BI2865) %>%
+  filter(str_detect(gene, "B4GALT") | gene == "PTPN11" | gene == "ILK")
+```
+
+```{r}
+#write a csv for joining to BE and PE data
+merged_df %>%
+  write.csv("Cas9.csv")
+```
