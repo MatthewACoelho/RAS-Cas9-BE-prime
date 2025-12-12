@@ -30,6 +30,7 @@ library(jsonlite)
 library(spgs)
 library(purrr)
 library(ggside)
+library(scales)
 ```
 
 ```{r}
@@ -44,7 +45,16 @@ zscore <- function(x) ((x-mean(x))/sd(x))
 ```{r}
 # read in library
 library <- as_tibble(read.csv("MAPK_BE_lib_191224.csv", stringsAsFactors = FALSE, header = TRUE))
+
+# enumerate library genes
 library
+
+library %>%
+  count(sgRNA_type)
+
+library %>%
+  filter(sgRNA_type %in% c("exonic")) %>%
+  count(Gene)
 ```
 
 ```{r}
@@ -288,7 +298,6 @@ data <- mutate(data, L2FC_A427_ABE_CTRL_plasmid_average = L2FC(A427_ABE_CTRL_ave
 # define function
 zscore <- function(x) ((x-mean(x))/sd(x))
 data <- mutate_at(data, vars(matches("L2FC")), list(zscore = zscore))
-colnames(data)
 ```
 
 ```{r}
@@ -296,7 +305,6 @@ colnames(data)
 data <-
   data %>%
   rename(new_ID = id)
-
 
 data <- left_join(library, data)
 data %>%
@@ -342,6 +350,24 @@ data %>%
   select(sgRNA_ID) %>%
   write_tsv("control_guides.txt")
 ```
+```{r}
+#define plot parameters
+pos <- position_jitter(seed = 2, width = 0.2, height = 0.2)
+```
+
+```{r}
+#define targeting gRNAs
+data %>%
+  count(sgRNA_type)
+
+data <-
+data %>%
+  mutate(gRNA_class = ifelse(sgRNA_type %in% c("PTEN_disrupting", "NF1_disrupting", "exonic"), "targeting", sgRNA_type))
+
+data%>%
+  count(gRNA_class)
+```
+
 ```{r}
 #read in the MAGeCK analysis
 
@@ -389,12 +415,40 @@ data
 ```
 
 ```{r}
+#determine read filter
+
+plot1 <- ggplot(data, aes(x = L2FC_A427_ABE_CTRL_plasmid_average_zscore , y = A427_BE_plasmid_reads)) +
+geom_pointdensity() +
+    geom_hline(yintercept=c(0,1000),linetype="dotted") +
+theme_classic()
+plot1
+
+plot1 <- ggplot(data, aes(x = L2FC_A427_ABE_RMC_plasmid_average_zscore , y = A427_BE_plasmid_reads)) +
+geom_pointdensity() +
+    geom_hline(yintercept=c(0,1000),linetype="dotted") +
+theme_classic()
+plot1
+
+plot1 <- ggplot(data, aes(x = L2FC_H23_ABE_CTRL_plasmid_average_zscore , y = H23_BE_plasmid_reads)) +
+geom_pointdensity() +
+    geom_hline(yintercept=c(0,600),linetype="dotted") +
+theme_classic()
+plot1
+
+plot1 <- ggplot(data, aes(x = L2FC_H23_ABE_RMC_plasmid_average_zscore , y = H23_BE_plasmid_reads)) +
+geom_pointdensity() +
+    geom_hline(yintercept=c(0,600),linetype="dotted") +
+theme_classic()
+plot1
+
+```
+
+```{r}
 # check for low read numbers and filter out <100 reads
 data %>% filter(H23_BE_plasmid_reads <100)
 data %>% filter(A427_BE_plasmid_reads <100)
 
 # 55 gRNAs with fewer than 50 in any control conditions - filter out
-
 data <- 
   data %>% 
   filter(H23_BE_plasmid_reads > 100 & A427_BE_plasmid_reads > 100) 
@@ -403,13 +457,149 @@ data
 ```
 
 ```{r}
+#Pearson correlation - reads
+r1 <- cor(data$A427_ABE_Ctrl_R1_reads, data$A427_ABE_Ctrl_R2_reads, method = "pearson")
+```
+
+```{r}
+#filtered read count correlation plot
+plot1 <- ggplot(data, aes(x = A427_ABE_Ctrl_R1_reads, y = A427_ABE_Ctrl_R2_reads)) +
+geom_pointdensity(size = 0.5) +
+      geom_abline(slope = 1, intercept = 0, linetype = "dashed") +
+theme_classic() +
+   xlab("R1\nA427 ABE: control reads") +
+  ylab("R2\n A427 ABE: control reads") +
+  labs(colour = "density") +
+    annotate("text", y = 9000, x = 1500, label = paste("r =", round(r1, 2)), parse = FALSE, size = 4)
+plot1
+ggsave("reads_ext.eps", width = 4, height = 3, path ="./figures_export")
+```
+
+```{r}
+#make a replicate versus replicate heatmap for the readcoutns from pycroquet forward
+
+# 1) pick columns: *_pyc_reads AND containing _R1_ or _R2_
+read_cols_H23 <- names(data) %>%
+  (\(x) x[str_detect(x, "_reads$") & str_detect(x, "_R[123]_") & str_detect(x, "H23")])()
+
+# 2) build pretty labels + ordering (group by sample, then R1/R2)
+meta <- tibble(col = read_cols_H23) %>%
+  mutate(
+    rep = str_match(col, "_R([123])_")[, 2],
+    sample = col %>%
+      str_replace("_R[123]_", "_") %>%
+      str_remove("_reads$"),
+    label = paste0(str_replace_all(sample, "_", " "), " R", rep)
+  ) %>%
+  arrange(sample, as.integer(rep))
+
+# 3) numeric matrix + correlations
+mat <- data %>%
+  select(all_of(meta$col)) %>%
+  mutate(across(everything(), ~ suppressWarnings(as.numeric(.x)))) %>%
+  as.matrix()
+
+cor_mat <- cor(mat, method = "pearson", use = "pairwise.complete.obs")
+
+# rename rows/cols with pretty labels
+colnames(cor_mat) <- meta$label
+rownames(cor_mat) <- meta$label
+
+# ---- 4) long form + keep LOWER triangle incl diagonal ----
+cor_long <- as.data.frame(as.table(cor_mat), stringsAsFactors = FALSE) %>%
+  rename(y = Var1, x = Var2, r = Freq) %>%
+  mutate(
+    x = factor(x, levels = meta$label),
+    y = factor(y, levels = meta$label),
+    ix = as.integer(x),
+    iy = as.integer(y)
+  ) %>%
+  filter(iy >= ix)
+
+# 5) plot: diagonal/lower-triangle heatmap
+plot1<-ggplot(cor_long, aes(x = x, y = y, fill = r)) +
+  geom_tile(color = "white", linewidth = 0.3) +
+  geom_text(aes(label = ifelse(is.na(r), "", sprintf("%.2f", r))), size = 2.5) +
+  scale_fill_gradient(low = "white", high = "red",
+                      limits = c(0.2, 1.0), oob = squish) +
+  scale_y_discrete(position = "left") +
+  coord_fixed() +
+  labs(title = "", x = NULL, y = NULL, fill = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+    legend.position = "top"
+  )
+plot1
+ggsave("prime_reads_Pearson_H23.eps", width = 8, height = 8, path ="./figures_export")
+```
+
+```{r}
+#make a replicate versus replicate heatmap for the readcoutns from pycroquet forward
+
+# 1) pick columns: *_pyc_reads AND containing _R1_ or _R2_
+read_cols_A427 <- names(data) %>%
+  (\(x) x[str_detect(x, "_reads$") & str_detect(x, "_R[123]_") & str_detect(x, "A427")])()
+
+# 2) build pretty labels + ordering (group by sample, then R1/R2)
+meta <- tibble(col = read_cols_A427) %>%
+  mutate(
+    rep = str_match(col, "_R([123])_")[, 2],
+    sample = col %>%
+      str_replace("_R[123]_", "_") %>%
+      str_remove("_reads$"),
+    label = paste0(str_replace_all(sample, "_", " "), " R", rep)
+  ) %>%
+  arrange(sample, as.integer(rep))
+
+# 3) numeric matrix + correlations
+mat <- data %>%
+  select(all_of(meta$col)) %>%
+  mutate(across(everything(), ~ suppressWarnings(as.numeric(.x)))) %>%
+  as.matrix()
+
+cor_mat <- cor(mat, method = "pearson", use = "pairwise.complete.obs")
+
+# rename rows/cols with pretty labels
+colnames(cor_mat) <- meta$label
+rownames(cor_mat) <- meta$label
+
+# ---- 4) long form + keep LOWER triangle incl diagonal ----
+cor_long <- as.data.frame(as.table(cor_mat), stringsAsFactors = FALSE) %>%
+  rename(y = Var1, x = Var2, r = Freq) %>%
+  mutate(
+    x = factor(x, levels = meta$label),
+    y = factor(y, levels = meta$label),
+    ix = as.integer(x),
+    iy = as.integer(y)
+  ) %>%
+  filter(iy >= ix)
+
+# 5) plot: diagonal/lower-triangle heatmap
+plot1<-ggplot(cor_long, aes(x = x, y = y, fill = r)) +
+  geom_tile(color = "white", linewidth = 0.3) +
+  geom_text(aes(label = ifelse(is.na(r), "", sprintf("%.2f", r))), size = 2.5) +
+  scale_fill_gradient(low = "white", high = "red",
+                      limits = c(0.2, 1.0), oob = squish) +
+  scale_y_discrete(position = "left") +
+  coord_fixed() +
+  labs(title = "", x = NULL, y = NULL, fill = NULL) +
+  theme_minimal(base_size = 11) +
+  theme(
+    panel.grid = element_blank(),
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+    legend.position = "top"
+  )
+plot1
+ggsave("prime_reads_Pearson_A427.eps", width = 8, height = 8, path ="./figures_export")
+```
+
+```{r}
 # dot plots _ proliferation - H23 ABE
 # plasmid vs drug
-experimental <- c("NF1_disrupting", "PTEN_disrupting", "exonic")
 
-pos <- position_jitter(seed = 2, width = 0.2, height = 0.2)
-
-plot1 <- ggplot(subset(data, sgRNA_type %in% c(experimental)), aes(x= L2FC_H23_ABE_CTRL_plasmid_average_zscore , y= L2FC_H23_ABE_BI_plasmid_average_zscore , colour = Gene)) + 
+plot1 <- ggplot(subset(data, gRNA_class %in% c("targeting")), aes(x= L2FC_H23_ABE_CTRL_plasmid_average_zscore , y= L2FC_H23_ABE_BI_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -419,7 +609,7 @@ geom_text_repel(aes(label=ifelse(L2FC_H23_ABE_CTRL_plasmid_average_zscore > 5 | 
 theme_classic()
 plot1
 
-plot2 <- ggplot(subset(data, sgRNA_type %in% c(experimental)), aes(x= L2FC_H23_ABE_CTRL_plasmid_average_zscore, y= L2FC_H23_ABE_ACBI3_plasmid_average_zscore, colour = Gene)) + 
+plot2 <- ggplot(subset(data, gRNA_class %in% c("targeting")), aes(x= L2FC_H23_ABE_CTRL_plasmid_average_zscore, y= L2FC_H23_ABE_ACBI3_plasmid_average_zscore, colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -429,7 +619,7 @@ geom_text_repel(aes(label=ifelse(L2FC_H23_ABE_CTRL_plasmid_average_zscore > 5 | 
 theme_classic()
 plot2
 
-plot3 <- ggplot(subset(data, sgRNA_type %in% c(experimental)), aes(x= L2FC_H23_ABE_CTRL_plasmid_average_zscore, y= L2FC_H23_ABE_RMC_plasmid_average_zscore, colour = Gene)) + 
+plot3 <- ggplot(subset(data, gRNA_class %in% c("targeting")), aes(x= L2FC_H23_ABE_CTRL_plasmid_average_zscore, y= L2FC_H23_ABE_RMC_plasmid_average_zscore, colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -443,11 +633,8 @@ plot3
 ```{r}
 # dot plots _ proliferation - A427 ABE
 # plasmid vs drug
-experimental <- c("NF1_disrupting", "PTEN_disrupting", "exonic")
 
-pos <- position_jitter(seed = 2, width = 0.2, height = 0.2)
-
-plot1 <- ggplot(subset(data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore , y= L2FC_A427_ABE_BI_plasmid_average_zscore , colour = Gene)) + 
+plot1 <- ggplot(subset(data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore , y= L2FC_A427_ABE_BI_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -457,7 +644,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_CTRL_plasmid_average_zscore > 5 |
 theme_classic()
 plot1
 
-plot2 <- ggplot(subset(data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_A427_ABE_ACBI3_plasmid_average_zscore, colour = Gene)) + 
+plot2 <- ggplot(subset(data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_A427_ABE_ACBI3_plasmid_average_zscore, colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -467,7 +654,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_CTRL_plasmid_average_zscore > 5 |
 theme_classic()
 plot2
 
-plot3 <- ggplot(subset(data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_A427_ABE_RMC_plasmid_average_zscore, colour = Gene)) + 
+plot3 <- ggplot(subset(data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_A427_ABE_RMC_plasmid_average_zscore, colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -477,7 +664,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_CTRL_plasmid_average_zscore > 5 |
 theme_classic()
 plot3
 
-plot4 <- ggplot(subset(data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_A427_ABE_MRTX_plasmid_average_zscore, colour = Gene)) + 
+plot4 <- ggplot(subset(data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_A427_ABE_MRTX_plasmid_average_zscore, colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -491,11 +678,8 @@ plot4
 ```{r}
 # dot plots _ proliferation - H23 ABE
 # drug vs drug
-experimental <- c("NF1_disrupting", "PTEN_disrupting", "exonic")
 
-pos <- position_jitter(seed = 2, width = 0.2, height = 0.2)
-
-plot1 <- ggplot(subset(data, sgRNA_type %in% c(experimental)), aes(x= L2FC_H23_ABE_BI_plasmid_average_zscore, y= L2FC_H23_ABE_RMC_plasmid_average_zscore , colour = Gene)) + 
+plot1 <- ggplot(subset(data, gRNA_class %in% c("targeting")), aes(x= L2FC_H23_ABE_BI_plasmid_average_zscore, y= L2FC_H23_ABE_RMC_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -505,7 +689,7 @@ geom_text_repel(aes(label=ifelse(L2FC_H23_ABE_BI_plasmid_average_zscore > 6 | L2
 theme_classic()
 plot1
 
-plot2 <- ggplot(subset(data, sgRNA_type %in% c(experimental)), aes(x= L2FC_H23_ABE_BI_plasmid_average_zscore , y= L2FC_H23_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
+plot2 <- ggplot(subset(data, gRNA_class %in% c("targeting")), aes(x= L2FC_H23_ABE_BI_plasmid_average_zscore , y= L2FC_H23_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -515,7 +699,7 @@ geom_text_repel(aes(label=ifelse(L2FC_H23_ABE_BI_plasmid_average_zscore > 6 | L2
 theme_classic()
 plot2
 
-plot3 <- ggplot(subset(data, sgRNA_type %in% c(experimental)), aes(x= L2FC_H23_ABE_RMC_plasmid_average_zscore , y = L2FC_H23_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
+plot3 <- ggplot(subset(data, gRNA_class %in% c("targeting")), aes(x= L2FC_H23_ABE_RMC_plasmid_average_zscore , y = L2FC_H23_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -529,11 +713,8 @@ plot3
 ```{r}
 # dot plots _ proliferation - A427 ABE
 # drug vs drug
-experimental <- c("NF1_disrupting", "PTEN_disrupting", "exonic")
 
-pos <- position_jitter(seed = 2, width = 0.2, height = 0.2)
-
-plot1 <- ggplot(subset(data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_BI_plasmid_average_zscore, y= L2FC_A427_ABE_RMC_plasmid_average_zscore , colour = Gene)) + 
+plot1 <- ggplot(subset(data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_BI_plasmid_average_zscore, y= L2FC_A427_ABE_RMC_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -543,7 +724,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_BI_plasmid_average_zscore > 6 | L
 theme_classic()
 plot1
 
-plot2 <- ggplot(subset(data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_BI_plasmid_average_zscore , y= L2FC_A427_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) +
+plot2 <- ggplot(subset(data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_BI_plasmid_average_zscore , y= L2FC_A427_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) +
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -553,7 +734,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_BI_plasmid_average_zscore > 6 | L
 theme_classic()
 plot2
 
-plot3 <- ggplot(subset(data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_RMC_plasmid_average_zscore , y = L2FC_A427_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
+plot3 <- ggplot(subset(data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_RMC_plasmid_average_zscore , y = L2FC_A427_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =1 ) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -563,7 +744,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_RMC_plasmid_average_zscore > 6 | 
 theme_classic()
 plot3
 
-plot4 <- ggplot(subset(data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_MRTX_plasmid_average_zscore , y = L2FC_A427_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
+plot4 <- ggplot(subset(data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_MRTX_plasmid_average_zscore , y = L2FC_A427_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -573,7 +754,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_MRTX_plasmid_average_zscore > 6 |
 theme_classic()
 plot4
 
-plot5 <- ggplot(subset(data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_MRTX_plasmid_average_zscore , y = L2FC_A427_ABE_RMC_plasmid_average_zscore , colour = Gene)) + 
+plot5 <- ggplot(subset(data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_MRTX_plasmid_average_zscore , y = L2FC_A427_ABE_RMC_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -583,7 +764,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_MRTX_plasmid_average_zscore > 6 |
 theme_classic()
 plot5
 
-plot6 <- ggplot(subset(data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_MRTX_plasmid_average_zscore , y = L2FC_A427_ABE_BI_plasmid_average_zscore , colour = Gene)) + 
+plot6 <- ggplot(subset(data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_MRTX_plasmid_average_zscore , y = L2FC_A427_ABE_BI_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =1) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -595,59 +776,154 @@ plot6
 ```
 
 ```{r}
-# dot plots _ proliferation - A427 ABE vs H23 ABE
-# cell line versus cell line
-experimental <- c("NF1_disrupting", "PTEN_disrupting", "exonic")
+#replicate correlation - H23 - ALL gRNAs
+#CTRL
+rep1 <-
+  data %>%
+  select(new_ID, L2FC_H23_ABE_CTRL_plasmid_exp1_zscore) %>%
+  distinct()
 
-pos <- position_jitter(seed = 2, width = 0.2, height = 0.2)
+rep2 <-
+  data %>%
+  select(new_ID, L2FC_H23_ABE_CTRL_plasmid_exp2_zscore) %>%
+  distinct()
 
-plot1 <- ggplot(subset(data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_H23_ABE_CTRL_plasmid_average_zscore , colour = Gene)) + 
-geom_point(position = pos, alpha = 1, size =2) +
-geom_hline(yintercept=c(0,0),linetype="dotted") +
-geom_vline(xintercept=c(0,0),linetype="dotted") +
-scale_shape_manual(values =c(19, 1)) +
-geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_CTRL_plasmid_average_zscore > 6 | L2FC_H23_ABE_CTRL_plasmid_average_zscore > 6 | L2FC_A427_ABE_CTRL_plasmid_average_zscore > 2 & L2FC_H23_ABE_CTRL_plasmid_average_zscore < -2 | L2FC_H23_ABE_CTRL_plasmid_average_zscore > 2 & L2FC_A427_ABE_CTRL_plasmid_average_zscore < -2 , paste(Gene), "")), size=3, position=pos, max.overlaps = Inf) +
-  #facet_wrap(~Gene) +
-theme_classic()
-plot1
+rep_correlation <- left_join(rep1, rep2) %>% 
+  filter(is.na(L2FC_H23_ABE_CTRL_plasmid_exp1_zscore) ==FALSE & is.na(L2FC_H23_ABE_CTRL_plasmid_exp2_zscore)==FALSE )%>%
+  distinct()
+r1 <- cor(rep_correlation$L2FC_H23_ABE_CTRL_plasmid_exp1_zscore, rep_correlation$L2FC_H23_ABE_CTRL_plasmid_exp2_zscore, method = "pearson")
 
-plot2 <- ggplot(subset(data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_BI_plasmid_average_zscore, y= L2FC_H23_ABE_BI_plasmid_average_zscore , colour = Gene)) + 
-geom_point(position = pos, alpha = 1, size =2) +
-geom_hline(yintercept=c(0,0),linetype="dotted") +
-geom_vline(xintercept=c(0,0),linetype="dotted") +
-scale_shape_manual(values =c(19, 1)) +
-geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_BI_plasmid_average_zscore > 6 | L2FC_H23_ABE_BI_plasmid_average_zscore > 6 | L2FC_A427_ABE_BI_plasmid_average_zscore > 2 & L2FC_H23_ABE_BI_plasmid_average_zscore < -2 | L2FC_H23_ABE_BI_plasmid_average_zscore > 2 & L2FC_A427_ABE_BI_plasmid_average_zscore < -2 , paste(Gene), "")), size=3, position=pos, max.overlaps = Inf) +
-  #facet_wrap(~Gene) +
-theme_classic()
-plot2
+#RMC
+rep1 <-
+  data %>%
+  select(new_ID, L2FC_H23_ABE_RMC_plasmid_exp1_zscore) %>%
+  distinct()
 
-plot3 <- ggplot(subset(data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_RMC_plasmid_average_zscore, y= L2FC_H23_ABE_RMC_plasmid_average_zscore , colour = Gene)) + 
-geom_point(position = pos, alpha = 1, size =2) +
-geom_hline(yintercept=c(0,0),linetype="dotted") +
-geom_vline(xintercept=c(0,0),linetype="dotted") +
-scale_shape_manual(values =c(19, 1)) +
-geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_RMC_plasmid_average_zscore > 6 | L2FC_H23_ABE_RMC_plasmid_average_zscore > 6 | L2FC_A427_ABE_RMC_plasmid_average_zscore > 2 & L2FC_H23_ABE_RMC_plasmid_average_zscore < -2 | L2FC_H23_ABE_RMC_plasmid_average_zscore > 2 & L2FC_A427_ABE_RMC_plasmid_average_zscore < -2 , paste(Gene), "")), size=3, position=pos, max.overlaps = Inf) +
-  #facet_wrap(~Gene) +
-theme_classic()
-plot3
+rep2 <-
+  data %>%
+  select(new_ID, L2FC_H23_ABE_RMC_plasmid_exp2_zscore) %>%
+  distinct()
 
-plot4 <- ggplot(subset(data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_ACBI3_plasmid_average_zscore, y= L2FC_H23_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
-geom_point(position = pos, alpha = 1, size =2) +
-geom_hline(yintercept=c(0,0),linetype="dotted") +
-geom_vline(xintercept=c(0,0),linetype="dotted") +
-scale_shape_manual(values =c(19, 1)) +
-geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_ACBI3_plasmid_average_zscore > 6 | L2FC_H23_ABE_ACBI3_plasmid_average_zscore > 6 | L2FC_A427_ABE_ACBI3_plasmid_average_zscore > 2 & L2FC_H23_ABE_ACBI3_plasmid_average_zscore < -2 | L2FC_H23_ABE_ACBI3_plasmid_average_zscore > 2 & L2FC_A427_ABE_ACBI3_plasmid_average_zscore < -2 , paste(Gene), "")), size=3, position=pos, max.overlaps = Inf) +
-  #facet_wrap(~Gene) +
-theme_classic()
-plot4
+rep_correlation <- left_join(rep1, rep2) %>% 
+  filter(is.na(L2FC_H23_ABE_RMC_plasmid_exp1_zscore) ==FALSE & is.na(L2FC_H23_ABE_RMC_plasmid_exp2_zscore)==FALSE ) %>%
+  distinct()
+r2 <- cor(rep_correlation$L2FC_H23_ABE_RMC_plasmid_exp1_zscore, rep_correlation$L2FC_H23_ABE_RMC_plasmid_exp2_zscore, method = "pearson")
+```
+
+```{r}
+#replicate correlation - H23 - SPLICE ESSENTIAL
+#CTRL
+rep1 <-
+  data %>%
+  filter(gRNA_class == "splice_essential") %>%
+  select(new_ID, L2FC_H23_ABE_CTRL_plasmid_exp1_zscore) %>%
+  distinct()
+
+rep2 <-
+  data %>%
+    filter(gRNA_class == "splice_essential") %>%
+  select(new_ID, L2FC_H23_ABE_CTRL_plasmid_exp2_zscore) %>%
+  distinct()
+
+rep_correlation <- left_join(rep1, rep2) %>% 
+  filter(is.na(L2FC_H23_ABE_CTRL_plasmid_exp1_zscore) ==FALSE & is.na(L2FC_H23_ABE_CTRL_plasmid_exp2_zscore)==FALSE )%>%
+  distinct()
+r11 <- cor(rep_correlation$L2FC_H23_ABE_CTRL_plasmid_exp1_zscore, rep_correlation$L2FC_H23_ABE_CTRL_plasmid_exp2_zscore, method = "pearson")
+
+#RMC
+rep1 <-
+  data %>%
+    filter(gRNA_class == "splice_essential") %>%
+  select(new_ID, L2FC_H23_ABE_RMC_plasmid_exp1_zscore) %>%
+  distinct()
+
+rep2 <-
+  data %>%
+    filter(gRNA_class == "splice_essential") %>%
+  select(new_ID, L2FC_H23_ABE_RMC_plasmid_exp2_zscore) %>%
+  distinct()
+
+rep_correlation <- left_join(rep1, rep2) %>% 
+  filter(is.na(L2FC_H23_ABE_RMC_plasmid_exp1_zscore) ==FALSE & is.na(L2FC_H23_ABE_RMC_plasmid_exp2_zscore)==FALSE ) %>%
+  distinct()
+r12 <- cor(rep_correlation$L2FC_H23_ABE_RMC_plasmid_exp1_zscore, rep_correlation$L2FC_H23_ABE_RMC_plasmid_exp2_zscore, method = "pearson")
+```
+
+```{r}
+#replicate correlation - H23 - OFF_TARGET LETHAL kill controls
+#CTRL
+rep1 <-
+  data %>%
+  filter(gRNA_class == "off_target_lethal") %>%
+  select(new_ID, L2FC_H23_ABE_CTRL_plasmid_exp1_zscore) %>%
+  distinct()
+
+rep2 <-
+  data %>%
+  filter(gRNA_class == "off_target_lethal") %>%
+  select(new_ID, L2FC_H23_ABE_CTRL_plasmid_exp2_zscore) %>%
+  distinct()
+
+rep_correlation <- left_join(rep1, rep2) %>% 
+  filter(is.na(L2FC_H23_ABE_CTRL_plasmid_exp1_zscore) ==FALSE & is.na(L2FC_H23_ABE_CTRL_plasmid_exp2_zscore)==FALSE )%>%
+  distinct()
+r13 <- cor(rep_correlation$L2FC_H23_ABE_CTRL_plasmid_exp1_zscore, rep_correlation$L2FC_H23_ABE_CTRL_plasmid_exp2_zscore, method = "pearson")
+
+#RMC
+rep1 <-
+  data %>%
+    filter(gRNA_class == "off_target_lethal") %>%
+  select(new_ID, L2FC_H23_ABE_RMC_plasmid_exp1_zscore) %>%
+  distinct()
+
+rep2 <-
+  data %>%
+    filter(gRNA_class == "off_target_lethal") %>%
+  select(new_ID, L2FC_H23_ABE_RMC_plasmid_exp2_zscore) %>%
+  distinct()
+
+rep_correlation <- left_join(rep1, rep2) %>% 
+  filter(is.na(L2FC_H23_ABE_RMC_plasmid_exp1_zscore) ==FALSE & is.na(L2FC_H23_ABE_RMC_plasmid_exp2_zscore)==FALSE ) %>%
+  distinct()
+r14 <- cor(rep_correlation$L2FC_H23_ABE_RMC_plasmid_exp1_zscore, rep_correlation$L2FC_H23_ABE_RMC_plasmid_exp2_zscore, method = "pearson")
 ```
 
 ```{r}
 #replicate correlation - plasmid - H23
+plot1 <- ggplot(data, aes(x= L2FC_H23_ABE_CTRL_plasmid_exp1_zscore , y= L2FC_H23_ABE_CTRL_plasmid_exp2_zscore)) + 
+geom_pointdensity(position = pos, size =0.5) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+  facet_wrap(~gRNA_class) +
+    labs(x= "H23 ABE R1\n control versus plasmid (z-score)") +
+  labs(y = "H23 ABE R2\n control versus plasmid (z-score)") +
+    labs(title= paste("all gRNAs: r = ", round(r1, 2), "\nsplice essential: r = ", round(r11, 2), ", off-target lethal: r = ", round(r13, 2)), parse = FALSE, size = 3) +
+        labs(colour= "density") +
+    scale_colour_viridis_c() +
+theme_classic()
+plot1
+ggsave("H23_ABE_Reps.eps", width = 5.5, height = 4, path ="./figures_export")
 
+plot1 <- ggplot(data, aes(x= L2FC_H23_ABE_RMC_plasmid_exp1_zscore , y= L2FC_H23_ABE_RMC_plasmid_exp2_zscore)) + 
+geom_pointdensity(position = pos, size =0.5) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+  facet_wrap(~gRNA_class) +
+    labs(x= "H23 ABE R1\n RMC-6236 versus plasmid (z-score)") +
+  labs(y = "H23 ABE R2\n RMC-6236 versus plasmid (z-score)") +
+    labs(title= paste("all gRNAs: r = ", round(r2, 2), "\nsplice essential: r = ", round(r12, 2), ", off-target lethal: r = ", round(r14, 2)), parse = FALSE, size = 3) +
+        labs(colour= "density") +
+    scale_colour_viridis_c() +
+theme_classic()
+plot1
+ggsave("H23_ABE_RMC_Reps.eps", width = 5.5, height = 4, path ="./figures_export")
+```
+
+```{r}
+#replicate correlation - plasmid - H23
 #ABE
 plot1 <- ggplot(data, aes(x= L2FC_H23_ABE_CTRL_plasmid_exp1_zscore , y= L2FC_H23_ABE_CTRL_plasmid_exp2_zscore)) + 
-geom_pointdensity(position = pos, alpha = 1, size =2) +
+geom_pointdensity(position = pos, alpha = 1, size =0.5) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
 scale_shape_manual(values =c(19, 1)) +
@@ -656,7 +932,7 @@ theme_classic()
 plot1
 
 plot2 <- ggplot(data, aes(x= L2FC_H23_ABE_BI_plasmid_exp1_zscore , y= L2FC_H23_ABE_BI_plasmid_exp2_zscore)) + 
-geom_pointdensity(position = pos, alpha = 1, size =2) +
+geom_pointdensity(position = pos, alpha = 1, size =0.5) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
 scale_shape_manual(values =c(19, 1)) +
@@ -665,7 +941,7 @@ theme_classic()
 plot2
 
 plot3 <- ggplot(data, aes(x= L2FC_H23_ABE_RMC_plasmid_exp1_zscore , y= L2FC_H23_ABE_RMC_plasmid_exp2_zscore)) + 
-geom_pointdensity(position = pos, alpha = 1, size =2) +
+geom_pointdensity(position = pos, alpha = 1, size =0.5) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
 scale_shape_manual(values =c(19, 1)) +
@@ -674,7 +950,7 @@ theme_classic()
 plot3
 
 plot4 <- ggplot(data, aes(x= L2FC_H23_ABE_ACBI3_plasmid_exp1_zscore , y= L2FC_H23_ABE_ACBI3_plasmid_exp2_zscore)) + 
-geom_pointdensity(position = pos, alpha = 1, size =2) +
+geom_pointdensity(position = pos, alpha = 1, size =0.5) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
 scale_shape_manual(values =c(19, 1)) +
@@ -684,11 +960,155 @@ plot4
 ```
 
 ```{r}
+#replicate correlation - A427 - ALL
+#CTRL
+rep1 <-
+  data %>%
+  select(new_ID, L2FC_A427_ABE_CTRL_plasmid_exp1_zscore) %>%
+  distinct()
+
+rep2 <-
+  data %>%
+  select(new_ID, L2FC_A427_ABE_CTRL_plasmid_exp2_zscore) %>%
+  distinct()
+
+rep_correlation <- left_join(rep1, rep2) %>% 
+  filter(is.na(L2FC_A427_ABE_CTRL_plasmid_exp1_zscore) ==FALSE & is.na(L2FC_A427_ABE_CTRL_plasmid_exp2_zscore)==FALSE )%>%
+  distinct()
+r3 <- cor(rep_correlation$L2FC_A427_ABE_CTRL_plasmid_exp1_zscore, rep_correlation$L2FC_A427_ABE_CTRL_plasmid_exp2_zscore, method = "pearson")
+
+#RMC
+rep1 <-
+  data %>%
+  select(new_ID, L2FC_A427_ABE_RMC_plasmid_exp1_zscore) %>%
+  distinct()
+
+rep2 <-
+  data %>%
+  select(new_ID, L2FC_A427_ABE_RMC_plasmid_exp3_zscore) %>%
+  distinct()
+
+rep_correlation <- left_join(rep1, rep2) %>% 
+  filter(is.na(L2FC_A427_ABE_RMC_plasmid_exp1_zscore) ==FALSE & is.na(L2FC_A427_ABE_RMC_plasmid_exp3_zscore)==FALSE ) %>%
+  distinct()
+r4 <- cor(rep_correlation$L2FC_A427_ABE_RMC_plasmid_exp1_zscore, rep_correlation$L2FC_A427_ABE_RMC_plasmid_exp3_zscore, method = "pearson")
+```
+
+```{r}
+#replicate correlation - A427 - SPLICE ESSENTIAL
+#CTRL
+rep1 <-
+  data %>%
+  filter(gRNA_class =="splice_essential") %>%
+  select(new_ID, L2FC_A427_ABE_CTRL_plasmid_exp1_zscore) %>%
+  distinct()
+
+rep2 <-
+  data %>%
+    filter(gRNA_class =="splice_essential") %>%
+  select(new_ID, L2FC_A427_ABE_CTRL_plasmid_exp2_zscore) %>%
+  distinct()
+
+rep_correlation <- left_join(rep1, rep2) %>% 
+  filter(is.na(L2FC_A427_ABE_CTRL_plasmid_exp1_zscore) ==FALSE & is.na(L2FC_A427_ABE_CTRL_plasmid_exp2_zscore)==FALSE )%>%
+  distinct()
+r7 <- cor(rep_correlation$L2FC_A427_ABE_CTRL_plasmid_exp1_zscore, rep_correlation$L2FC_A427_ABE_CTRL_plasmid_exp2_zscore, method = "pearson")
+
+#RMC
+rep1 <-
+  data %>%
+    filter(gRNA_class =="splice_essential") %>%
+  select(new_ID, L2FC_A427_ABE_RMC_plasmid_exp1_zscore) %>%
+  distinct()
+
+rep2 <-
+  data %>%
+    filter(gRNA_class =="splice_essential") %>%
+  select(new_ID, L2FC_A427_ABE_RMC_plasmid_exp3_zscore) %>%
+  distinct()
+
+rep_correlation <- left_join(rep1, rep2) %>% 
+  filter(is.na(L2FC_A427_ABE_RMC_plasmid_exp1_zscore) ==FALSE & is.na(L2FC_A427_ABE_RMC_plasmid_exp3_zscore)==FALSE ) %>%
+  distinct()
+r8 <- cor(rep_correlation$L2FC_A427_ABE_RMC_plasmid_exp1_zscore, rep_correlation$L2FC_A427_ABE_RMC_plasmid_exp3_zscore, method = "pearson")
+```
+
+```{r}
+#replicate correlation - A427 - OFF TARGET LETHAL kill control
+#CTRL
+rep1 <-
+  data %>%
+  filter(gRNA_class =="off_target_lethal") %>%
+  select(new_ID, L2FC_A427_ABE_CTRL_plasmid_exp1_zscore) %>%
+  distinct()
+
+rep2 <-
+  data %>%
+    filter(gRNA_class =="off_target_lethal") %>%
+  select(new_ID, L2FC_A427_ABE_CTRL_plasmid_exp2_zscore) %>%
+  distinct()
+
+rep_correlation <- left_join(rep1, rep2) %>% 
+  filter(is.na(L2FC_A427_ABE_CTRL_plasmid_exp1_zscore) ==FALSE & is.na(L2FC_A427_ABE_CTRL_plasmid_exp2_zscore)==FALSE )%>%
+  distinct()
+r9 <- cor(rep_correlation$L2FC_A427_ABE_CTRL_plasmid_exp1_zscore, rep_correlation$L2FC_A427_ABE_CTRL_plasmid_exp2_zscore, method = "pearson")
+
+#RMC
+rep1 <-
+  data %>%
+    filter(gRNA_class =="off_target_lethal") %>%
+  select(new_ID, L2FC_A427_ABE_RMC_plasmid_exp1_zscore) %>%
+  distinct()
+
+rep2 <-
+  data %>%
+    filter(gRNA_class =="off_target_lethal") %>%
+  select(new_ID, L2FC_A427_ABE_RMC_plasmid_exp3_zscore) %>%
+  distinct()
+
+rep_correlation <- left_join(rep1, rep2) %>% 
+  filter(is.na(L2FC_A427_ABE_RMC_plasmid_exp1_zscore) ==FALSE & is.na(L2FC_A427_ABE_RMC_plasmid_exp3_zscore)==FALSE ) %>%
+  distinct()
+r10 <- cor(rep_correlation$L2FC_A427_ABE_RMC_plasmid_exp1_zscore, rep_correlation$L2FC_A427_ABE_RMC_plasmid_exp3_zscore, method = "pearson")
+```
+
+```{r}
 #replicate correlation - plasmid - A427
 
 #ABE
 plot1 <- ggplot(data, aes(x= L2FC_A427_ABE_CTRL_plasmid_exp1_zscore , y= L2FC_A427_ABE_CTRL_plasmid_exp2_zscore)) + 
-geom_pointdensity(position = pos, alpha = 1, size =2) +
+geom_pointdensity(position = pos, size =0.5) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+  facet_wrap(~gRNA_class) +
+  labs(x= "A427 ABE R1\n control versus plasmid (z-score)") +
+  labs(y = "A427 ABE R2\n control versus plasmid (z-score)") +
+    labs(title= paste("all gRNAs: r = ", round(r3, 2), "\nsplice essential: r = ", round(r7, 2), ", off-target lethal: r = ", round(r9, 2)), parse = FALSE, size = 3) +
+        labs(colour= "density") +
+    scale_colour_viridis_c() +
+theme_classic()
+plot1
+ggsave("A427_ABE_Reps.eps", width = 5.5, height = 4, path ="./figures_export")
+
+plot1 <- ggplot(data, aes(x= L2FC_A427_ABE_RMC_plasmid_exp1_zscore , y= L2FC_A427_ABE_RMC_plasmid_exp3_zscore)) + 
+geom_pointdensity(position = pos, size =0.5) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+  facet_wrap(~gRNA_class) +
+  labs(x= "A427 ABE R1\n RMC-6236 versus plasmid (z-score)") +
+  labs(y = "A427 ABE R2\n RMC-6236 versus plasmid (z-score)") +
+    labs(title= paste("all gRNAs: r = ", round(r4, 2), "\nsplice essential: r = ", round(r8, 2), ", off-target lethal: r = ", round(r10, 2)), parse = FALSE, size = 3) +
+      labs(colour= "density") +
+  scale_colour_viridis_c() +
+theme_classic()
+plot1
+ggsave("A427_ABE_Reps_RMC.eps", width = 5.5, height = 4, path ="./figures_export")
+```
+
+```{r}
+#replicate correlation - plasmid - A427
+plot1 <- ggplot(data, aes(x= L2FC_A427_ABE_CTRL_plasmid_exp1_zscore , y= L2FC_A427_ABE_CTRL_plasmid_exp2_zscore)) + 
+geom_pointdensity(position = pos, alpha = 1, size =0.5) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
 scale_shape_manual(values =c(19, 1)) +
@@ -697,7 +1117,7 @@ theme_classic()
 plot1
 
 plot2 <- ggplot(data, aes(x= L2FC_A427_ABE_BI_plasmid_exp1_zscore , y= L2FC_A427_ABE_BI_plasmid_exp2_zscore)) + 
-geom_pointdensity(position = pos, alpha = 1, size =2) +
+geom_pointdensity(position = pos, alpha = 1, size =0.5) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
 scale_shape_manual(values =c(19, 1)) +
@@ -706,7 +1126,7 @@ theme_classic()
 plot2
 
 plot3 <- ggplot(data, aes(x= L2FC_A427_ABE_RMC_plasmid_exp1_zscore , y= L2FC_A427_ABE_RMC_plasmid_exp2_zscore)) + 
-geom_pointdensity(position = pos, alpha = 1, size =2) +
+geom_pointdensity(position = pos, alpha = 1, size =0.5) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
 scale_shape_manual(values =c(19, 1)) +
@@ -715,7 +1135,7 @@ theme_classic()
 plot3
 
 plot4 <- ggplot(data, aes(x= L2FC_A427_ABE_ACBI3_plasmid_exp1_zscore , y= L2FC_A427_ABE_ACBI3_plasmid_exp2_zscore)) + 
-geom_pointdensity(position = pos, alpha = 1, size =2) +
+geom_pointdensity(position = pos, alpha = 1, size =0.5) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
 scale_shape_manual(values =c(19, 1)) +
@@ -724,7 +1144,7 @@ theme_classic()
 plot4
 
 plot5 <- ggplot(data, aes(x= L2FC_A427_ABE_MRTX_plasmid_exp1_zscore , y= L2FC_A427_ABE_MRTX_plasmid_exp2_zscore)) + 
-geom_pointdensity(position = pos, alpha = 1, size =2) +
+geom_pointdensity(position = pos, alpha = 1, size =0.5) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
 scale_shape_manual(values =c(19, 1)) +
@@ -738,7 +1158,7 @@ plot5
 
 #ABE
 plot1 <- ggplot(data, aes(x= L2FC_A427_ABE_CTRL_plasmid_exp1_zscore , y= L2FC_A427_ABE_CTRL_plasmid_exp3_zscore)) + 
-geom_pointdensity(position = pos, alpha = 1, size =2) +
+geom_pointdensity(position = pos, alpha = 1, size =0.5) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
 scale_shape_manual(values =c(19, 1)) +
@@ -747,7 +1167,7 @@ theme_classic()
 plot1
 
 plot2 <- ggplot(data, aes(x= L2FC_A427_ABE_CTRL_plasmid_exp2_zscore , y= L2FC_A427_ABE_CTRL_plasmid_exp3_zscore)) + 
-geom_pointdensity(position = pos, alpha = 1, size =2) +
+geom_pointdensity(position = pos, alpha = 1, size =0.5) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
 scale_shape_manual(values =c(19, 1)) +
@@ -756,7 +1176,7 @@ theme_classic()
 plot2
 
 plot3 <- ggplot(data, aes(x= L2FC_A427_ABE_RMC_plasmid_exp1_zscore , y= L2FC_A427_ABE_RMC_plasmid_exp3_zscore)) + 
-geom_pointdensity(position = pos, alpha = 1, size =2) +
+geom_pointdensity(position = pos, alpha = 1, size =0.5) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
 scale_shape_manual(values =c(19, 1)) +
@@ -765,7 +1185,7 @@ theme_classic()
 plot3
 
 plot4 <- ggplot(data, aes(x= L2FC_A427_ABE_RMC_plasmid_exp2_zscore , y= L2FC_A427_ABE_RMC_plasmid_exp3_zscore)) + 
-geom_pointdensity(position = pos, alpha = 1, size =2) +
+geom_pointdensity(position = pos, alpha = 1, size =0.5) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
 scale_shape_manual(values =c(19, 1)) +
@@ -773,29 +1193,93 @@ scale_shape_manual(values =c(19, 1)) +
 theme_classic()
 plot4
 ```
+```{r}
+#order data by gRNA_class
+data$gRNA_class <- 
+  factor(data$gRNA_class, levels = c("targeting", "off_target_lethal", "splice_essential", "non_targeting",  "intergenic","splice_nonessential"))
+```
+
+```{r}
+#stats
+NT_H23 <- 
+  data %>%
+  filter(gRNA_class == "non_targeting") %>%
+  select(L2FC_H23_ABE_CTRL_plasmid_average_zscore)
+
+se_H23 <- 
+data %>%
+  filter(gRNA_class == "splice_essential") %>%
+  select(L2FC_H23_ABE_CTRL_plasmid_average_zscore)
+  
+ofl_H23 <- 
+data %>%
+  filter(gRNA_class == "off_target_lethal") %>%
+  select(L2FC_H23_ABE_CTRL_plasmid_average_zscore)
+
+stats1 <- t.test(NT_H23, se_H23, paired = FALSE, alternative = c("two.sided"))
+stats2 <- t.test(NT_H23, ofl_H23, paired = FALSE, alternative = c("two.sided"))
+
+# Make a nice label for the plot
+p_lab1 <- paste0("italic(P) == ", format(stats1$p.value, digits = 2, scientific = TRUE))
+p_lab2 <- paste0("italic(P) == ", format(stats2$p.value, digits = 2, scientific = TRUE))
+```
 
 ```{r}
 #control gRNA distributions - H23
-plot1 <- ggplot(data, aes(x= sgRNA_type , y= L2FC_H23_ABE_CTRL_plasmid_average_zscore )) + 
-geom_point(position = pos, alpha = 0.3, size =2) +
+plot1 <- ggplot(data, aes(y = gRNA_class, x = L2FC_H23_ABE_CTRL_plasmid_average_zscore )) + 
+geom_point(position = pos, alpha = 1, size =0.5) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
 scale_shape_manual(values =c(19, 1)) +
   geom_boxplot(colour = "salmon", alpha = 0) +
+labs(x= "H23 ABE: control versus plasmid (z-score)") +
+  labs(y = "") +
+  annotate("text",  x = 4.5, y = 3.5, label = p_lab1, parse = TRUE, size = 3) +
+  annotate("text",  x = 4.5, y = 2.5, label = p_lab2, parse = TRUE, size = 3) +
 theme_classic()
 plot1
+ggsave("controls_box_H23_ext.eps", width = 4.5, height = 3.5, path ="./figures_export")
+```
+```{r}
+#stats
+NT_A427 <- 
+  data %>%
+  filter(gRNA_class == "non_targeting") %>%
+  select(L2FC_A427_ABE_CTRL_plasmid_average_zscore)
+
+se_A427 <- 
+data %>%
+  filter(gRNA_class == "splice_essential") %>%
+  select(L2FC_A427_ABE_CTRL_plasmid_average_zscore)
+  
+ofl_A427 <- 
+data %>%
+  filter(gRNA_class == "off_target_lethal") %>%
+  select(L2FC_A427_ABE_CTRL_plasmid_average_zscore)
+
+stats3 <- t.test(NT_A427, se_A427, paired = FALSE, alternative = c("two.sided"))
+stats4 <- t.test(NT_A427, ofl_A427, paired = FALSE, alternative = c("two.sided"))
+
+# Make a nice label for the plot
+p_lab3 <- paste0("italic(P) == ", format(stats3$p.value, digits = 2, scientific = TRUE))
+p_lab4 <- paste0("italic(P) == ", format(stats4$p.value, digits = 2, scientific = TRUE))
 ```
 
 ```{r}
 #control gRNA distributions - A427
-plot1 <- ggplot(data, aes(x= sgRNA_type , y= L2FC_A427_ABE_CTRL_plasmid_average_zscore )) + 
-geom_point(position = pos, alpha = 0.3, size =2) +
+plot1 <- ggplot(data, aes(y = gRNA_class, x = L2FC_A427_ABE_CTRL_plasmid_average_zscore )) + 
+geom_point(position = pos, alpha = 1, size = 0.5) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
 scale_shape_manual(values =c(19, 1)) +
   geom_boxplot(colour = "salmon", alpha = 0) +
-theme_classic()
+  labs(x= "A427 ABE: control versus plasmid (z-score)") +
+  labs(y = "") +
+theme_classic() +
+  annotate("text",  x = 3.8, y = 3.5, label = p_lab3, parse = TRUE, size = 3) +
+  annotate("text",  x = 3.8, y = 2.5, label = p_lab4, parse = TRUE, size = 3)
 plot1
+ggsave("controls_box_A427_ext.eps", width = 4.5, height = 3.5, path ="./figures_export")
 ```
 
 ```{r}
@@ -890,11 +1374,6 @@ annotated_data %>%
   select(exact) %>%
   dplyr::count(exact)
 
-annotated_data %>%
-  filter(Gene %in% c(targets$gene)) %>%
-  select(Gene, exact) %>%
-  distinct()
-
 annotated_data <- 
   annotated_data %>%
   filter(is.na(exact) == TRUE | exact <=2)
@@ -906,7 +1385,7 @@ annotated_data %>%
 
 ```{r}
 #plot numerical amino acid position approximation against z-scores - H23
-plot1 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= Amino_Acid_Position_simple , y= L2FC_H23_ABE_CTRL_plasmid_average_zscore , colour = most_severe_consequence)) + 
+plot1 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= Amino_Acid_Position_simple , y= L2FC_H23_ABE_CTRL_plasmid_average_zscore , colour = most_severe_consequence)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -916,7 +1395,7 @@ geom_text_repel(aes(label=ifelse(L2FC_H23_ABE_CTRL_plasmid_average_zscore > 6, p
 theme_classic()
 plot1
 
-plot2 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= Amino_Acid_Position_simple , y= L2FC_H23_ABE_BI_plasmid_average_zscore , colour = most_severe_consequence)) + 
+plot2 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= Amino_Acid_Position_simple , y= L2FC_H23_ABE_BI_plasmid_average_zscore , colour = most_severe_consequence)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -926,7 +1405,7 @@ geom_text_repel(aes(label=ifelse(L2FC_H23_ABE_BI_plasmid_average_zscore > 6, pas
 theme_classic()
 plot2
 
-plot3 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= Amino_Acid_Position_simple , y= L2FC_H23_ABE_ACBI3_plasmid_average_zscore , colour = most_severe_consequence)) + 
+plot3 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= Amino_Acid_Position_simple , y= L2FC_H23_ABE_ACBI3_plasmid_average_zscore , colour = most_severe_consequence)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -936,7 +1415,7 @@ geom_text_repel(aes(label=ifelse(L2FC_H23_ABE_ACBI3_plasmid_average_zscore > 6, 
 theme_classic()
 plot3
 
-plot4 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= Amino_Acid_Position_simple , y= L2FC_H23_ABE_RMC_plasmid_average_zscore , colour = most_severe_consequence)) + 
+plot4 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= Amino_Acid_Position_simple , y= L2FC_H23_ABE_RMC_plasmid_average_zscore , colour = most_severe_consequence)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -949,7 +1428,7 @@ plot4
 
 ```{r}
 #plot numerical amino acid position approximation against z-scores - A427
-plot1 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= Amino_Acid_Position_simple , y= L2FC_A427_ABE_CTRL_plasmid_average_zscore , colour = most_severe_consequence)) + 
+plot1 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= Amino_Acid_Position_simple , y= L2FC_A427_ABE_CTRL_plasmid_average_zscore , colour = most_severe_consequence)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -959,7 +1438,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_CTRL_plasmid_average_zscore > 6, 
 theme_classic()
 plot1
 
-plot2 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= Amino_Acid_Position_simple , y= L2FC_A427_ABE_BI_plasmid_average_zscore , colour = most_severe_consequence)) + 
+plot2 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= Amino_Acid_Position_simple , y= L2FC_A427_ABE_BI_plasmid_average_zscore , colour = most_severe_consequence)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -969,7 +1448,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_BI_plasmid_average_zscore > 6, pa
 theme_classic()
 plot2
 
-plot3 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= Amino_Acid_Position_simple , y= L2FC_A427_ABE_ACBI3_plasmid_average_zscore , colour = most_severe_consequence)) + 
+plot3 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= Amino_Acid_Position_simple , y= L2FC_A427_ABE_ACBI3_plasmid_average_zscore , colour = most_severe_consequence)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -979,7 +1458,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_ACBI3_plasmid_average_zscore > 6,
 theme_classic()
 plot3
 
-plot4 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= Amino_Acid_Position_simple , y= L2FC_A427_ABE_RMC_plasmid_average_zscore , colour = most_severe_consequence)) + 
+plot4 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= Amino_Acid_Position_simple , y= L2FC_A427_ABE_RMC_plasmid_average_zscore , colour = most_severe_consequence)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -989,7 +1468,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_RMC_plasmid_average_zscore > 6, p
 theme_classic()
 plot4
 
-plot5 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= Amino_Acid_Position_simple , y= L2FC_A427_ABE_MRTX_plasmid_average_zscore , colour = most_severe_consequence)) + 
+plot5 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= Amino_Acid_Position_simple , y= L2FC_A427_ABE_MRTX_plasmid_average_zscore , colour = most_severe_consequence)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1035,9 +1514,8 @@ plot3
 
 ```{r}
 #compare drugs and label resistant residues - H23
-pos <- position_jitter(seed = 2, width = 0.2, height = 0.2)
 
-plot1 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_H23_ABE_RMC_plasmid_average_zscore , y= L2FC_H23_ABE_BI_plasmid_average_zscore , colour = Gene)) + 
+plot1 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_H23_ABE_RMC_plasmid_average_zscore , y= L2FC_H23_ABE_BI_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 0.4, size = 2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1047,7 +1525,7 @@ geom_text_repel(aes(label=ifelse(L2FC_H23_ABE_BI_plasmid_average_zscore > 6 | L2
 theme_classic()
 plot1
 
-plot2 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_H23_ABE_RMC_plasmid_average_zscore , y= L2FC_H23_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
+plot2 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_H23_ABE_RMC_plasmid_average_zscore , y= L2FC_H23_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 0.4, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1057,7 +1535,7 @@ geom_text_repel(aes(label=ifelse(L2FC_H23_ABE_ACBI3_plasmid_average_zscore > 6 |
 theme_classic()
 plot2
 
-plot3 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_H23_ABE_BI_plasmid_average_zscore , y= L2FC_H23_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
+plot3 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_H23_ABE_BI_plasmid_average_zscore , y= L2FC_H23_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 0.4, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1070,9 +1548,8 @@ plot3
 
 ```{r}
 #compare drugs and label resistant residues - A427
-pos <- position_jitter(seed = 2, width = 0.2, height = 0.2)
 
-plot1 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_RMC_plasmid_average_zscore , y= L2FC_A427_ABE_BI_plasmid_average_zscore , colour = Gene)) + 
+plot1 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_RMC_plasmid_average_zscore , y= L2FC_A427_ABE_BI_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 0.4, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1082,7 +1559,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_BI_plasmid_average_zscore > 6 | L
 theme_classic()
 plot1
 
-plot2 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_RMC_plasmid_average_zscore , y= L2FC_A427_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
+plot2 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_RMC_plasmid_average_zscore , y= L2FC_A427_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 0.4, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1092,7 +1569,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_ACBI3_plasmid_average_zscore > 6 
 theme_classic()
 plot2
 
-plot3 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_BI_plasmid_average_zscore , y= L2FC_A427_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
+plot3 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_BI_plasmid_average_zscore , y= L2FC_A427_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 0.4, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1102,7 +1579,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_BI_plasmid_average_zscore > 6 | L
 theme_classic()
 plot3
 
-plot4 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_MRTX_plasmid_average_zscore , y= L2FC_A427_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
+plot4 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_MRTX_plasmid_average_zscore , y= L2FC_A427_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 0.4, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1112,7 +1589,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_MRTX_plasmid_average_zscore > 6 |
 theme_classic()
 plot4
 
-plot5 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_MRTX_plasmid_average_zscore , y= L2FC_A427_ABE_BI_plasmid_average_zscore , colour = Gene)) + 
+plot5 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_MRTX_plasmid_average_zscore , y= L2FC_A427_ABE_BI_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 0.4, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1122,7 +1599,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_MRTX_plasmid_average_zscore > 6 |
 theme_classic()
 plot5
 
-plot6 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_MRTX_plasmid_average_zscore , y= L2FC_A427_ABE_RMC_plasmid_average_zscore , colour = Gene)) + 
+plot6 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_MRTX_plasmid_average_zscore , y= L2FC_A427_ABE_RMC_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 0.4, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1132,10 +1609,11 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_MRTX_plasmid_average_zscore > 6 |
 theme_classic()
 plot6
 ```
+
 ```{r}
 #replicate correlation with MAGeCK
 #H23
-plot1 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_H23_ABE_RMC_plasmid_exp1_zscore , y= L2FC_H23_ABE_RMC_plasmid_exp2_zscore , colour = plasmid_vs_H23_ABE_RMC_combined_MAGeCK_p.twosided, size = plasmid_vs_H23_ABE_RMC_combined_MAGeCK_FDR)) + 
+plot1 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_H23_ABE_RMC_plasmid_exp1_zscore , y= L2FC_H23_ABE_RMC_plasmid_exp2_zscore , colour = plasmid_vs_H23_ABE_RMC_combined_MAGeCK_p.twosided, size = plasmid_vs_H23_ABE_RMC_combined_MAGeCK_FDR)) + 
 geom_point(position = pos, alpha = 1) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1145,7 +1623,7 @@ geom_text_repel(aes(label=ifelse(L2FC_H23_ABE_RMC_plasmid_average_zscore > 3 & L
 theme_classic()
 plot1
 
-plot2 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_H23_ABE_BI_plasmid_exp1_zscore , y= L2FC_H23_ABE_BI_plasmid_exp2_zscore , colour = plasmid_vs_H23_ABE_BI_combined_MAGeCK_p.twosided, size = plasmid_vs_H23_ABE_BI_combined_MAGeCK_FDR)) + 
+plot2 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_H23_ABE_BI_plasmid_exp1_zscore , y= L2FC_H23_ABE_BI_plasmid_exp2_zscore , colour = plasmid_vs_H23_ABE_BI_combined_MAGeCK_p.twosided, size = plasmid_vs_H23_ABE_BI_combined_MAGeCK_FDR)) + 
 geom_point(position = pos, alpha = 1) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1155,7 +1633,7 @@ geom_text_repel(aes(label=ifelse(L2FC_H23_ABE_BI_plasmid_average_zscore > 3 & L2
 theme_classic()
 plot2
 
-plot3 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_H23_ABE_ACBI3_plasmid_exp1_zscore , y= L2FC_H23_ABE_ACBI3_plasmid_exp2_zscore , colour = plasmid_vs_H23_ABE_ACBI3_combined_MAGeCK_p.twosided, size = plasmid_vs_H23_ABE_ACBI3_combined_MAGeCK_FDR)) + 
+plot3 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_H23_ABE_ACBI3_plasmid_exp1_zscore , y= L2FC_H23_ABE_ACBI3_plasmid_exp2_zscore , colour = plasmid_vs_H23_ABE_ACBI3_combined_MAGeCK_p.twosided, size = plasmid_vs_H23_ABE_ACBI3_combined_MAGeCK_FDR)) + 
 geom_point(position = pos, alpha = 1) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1165,7 +1643,7 @@ geom_text_repel(aes(label=ifelse(L2FC_H23_ABE_ACBI3_plasmid_average_zscore > 3 &
 theme_classic()
 plot3
 
-plot4 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_H23_ABE_CTRL_plasmid_exp1_zscore , y= L2FC_H23_ABE_CTRL_plasmid_exp2_zscore , colour = plasmid_vs_H23_ABE_Ctrl_combined_MAGeCK_p.twosided, size = plasmid_vs_H23_ABE_Ctrl_combined_MAGeCK_FDR)) + 
+plot4 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_H23_ABE_CTRL_plasmid_exp1_zscore , y= L2FC_H23_ABE_CTRL_plasmid_exp2_zscore , colour = plasmid_vs_H23_ABE_Ctrl_combined_MAGeCK_p.twosided, size = plasmid_vs_H23_ABE_Ctrl_combined_MAGeCK_FDR)) + 
 geom_point(position = pos, alpha = 1) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1178,7 +1656,7 @@ plot4
 ```{r}
 #replicate correlation with MAGeCK
 #A427
-plot1 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_RMC_plasmid_exp1_zscore , y= L2FC_A427_ABE_RMC_plasmid_exp2_zscore , colour = plasmid_vs_A427_ABE_RMC_combined_MAGeCK_p.twosided, size = plasmid_vs_A427_ABE_RMC_combined_MAGeCK_FDR)) + 
+plot1 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_RMC_plasmid_exp1_zscore , y= L2FC_A427_ABE_RMC_plasmid_exp2_zscore , colour = plasmid_vs_A427_ABE_RMC_combined_MAGeCK_p.twosided, size = plasmid_vs_A427_ABE_RMC_combined_MAGeCK_FDR)) + 
 geom_point(position = pos, alpha = 1) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1188,7 +1666,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_RMC_plasmid_average_zscore > 3 & 
 theme_classic()
 plot1
 
-plot2 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_BI_plasmid_exp1_zscore , y= L2FC_A427_ABE_BI_plasmid_exp2_zscore , colour = plasmid_vs_A427_ABE_BI_combined_MAGeCK_p.twosided, size = plasmid_vs_A427_ABE_BI_combined_MAGeCK_FDR)) + 
+plot2 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_BI_plasmid_exp1_zscore , y= L2FC_A427_ABE_BI_plasmid_exp2_zscore , colour = plasmid_vs_A427_ABE_BI_combined_MAGeCK_p.twosided, size = plasmid_vs_A427_ABE_BI_combined_MAGeCK_FDR)) + 
 geom_point(position = pos, alpha = 1) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1198,7 +1676,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_BI_plasmid_average_zscore > 3 & L
 theme_classic()
 plot2
 
-plot3 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_ACBI3_plasmid_exp1_zscore , y= L2FC_A427_ABE_ACBI3_plasmid_exp2_zscore , colour = plasmid_vs_A427_ABE_ACBI3_combined_MAGeCK_p.twosided, size = plasmid_vs_A427_ABE_ACBI3_combined_MAGeCK_FDR)) +
+plot3 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_ACBI3_plasmid_exp1_zscore , y= L2FC_A427_ABE_ACBI3_plasmid_exp2_zscore , colour = plasmid_vs_A427_ABE_ACBI3_combined_MAGeCK_p.twosided, size = plasmid_vs_A427_ABE_ACBI3_combined_MAGeCK_FDR)) +
 geom_point(position = pos, alpha = 1) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1208,7 +1686,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_ACBI3_plasmid_average_zscore > 3 
 theme_classic()
 plot3
 
-plot4 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_CTRL_plasmid_exp1_zscore , y= L2FC_A427_ABE_CTRL_plasmid_exp2_zscore , colour = plasmid_vs_A427_ABE_Ctrl_combined_MAGeCK_p.twosided, size = plasmid_vs_A427_ABE_Ctrl_combined_MAGeCK_FDR)) + 
+plot4 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_CTRL_plasmid_exp1_zscore , y= L2FC_A427_ABE_CTRL_plasmid_exp2_zscore , colour = plasmid_vs_A427_ABE_Ctrl_combined_MAGeCK_p.twosided, size = plasmid_vs_A427_ABE_Ctrl_combined_MAGeCK_FDR)) + 
 geom_point(position = pos, alpha = 1) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1218,7 +1696,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_CTRL_plasmid_average_zscore > 3 &
 theme_classic()
 plot4
 
-plot5 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_MRTX_plasmid_exp1_zscore , y= L2FC_A427_ABE_MRTX_plasmid_exp2_zscore , colour = plasmid_vs_A427_ABE_MRTX_combined_MAGeCK_p.twosided, size = plasmid_vs_A427_ABE_MRTX_combined_MAGeCK_FDR)) + 
+plot5 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_MRTX_plasmid_exp1_zscore , y= L2FC_A427_ABE_MRTX_plasmid_exp2_zscore , colour = plasmid_vs_A427_ABE_MRTX_combined_MAGeCK_p.twosided, size = plasmid_vs_A427_ABE_MRTX_combined_MAGeCK_FDR)) + 
 geom_point(position = pos, alpha = 1) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1600,7 +2078,7 @@ plot3
 
 ```{r}
 #confidential - residues 
-plot3 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_RMC_plasmid_average_zscore, y= L2FC_H23_ABE_RMC_plasmid_average_zscore , colour = Gene)) + 
+plot3 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_RMC_plasmid_average_zscore, y= L2FC_H23_ABE_RMC_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1609,7 +2087,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_RMC_plasmid_average_zscore > 9 & 
 theme_classic()
 plot3
 
-plot4 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_ACBI3_plasmid_average_zscore, y= L2FC_H23_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
+plot4 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_ACBI3_plasmid_average_zscore, y= L2FC_H23_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1618,7 +2096,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_ACBI3_plasmid_average_zscore > 8 
 theme_classic()
 plot4
 
-plot1 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_BI_plasmid_average_zscore, y= L2FC_A427_ABE_RMC_plasmid_average_zscore , colour = Gene)) + 
+plot1 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_BI_plasmid_average_zscore, y= L2FC_A427_ABE_RMC_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1628,7 +2106,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_BI_plasmid_average_zscore > 6 | L
 theme_classic()
 plot1
 
-plot1 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_ACBI3_plasmid_average_zscore, y= L2FC_A427_ABE_RMC_plasmid_average_zscore , colour = Gene)) + 
+plot1 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_ACBI3_plasmid_average_zscore, y= L2FC_A427_ABE_RMC_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1639,7 +2117,7 @@ theme_classic()
 plot1
 
 #FGFR1
-plot1 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental) & Gene == "FGFR1"), aes(x= Amino_Acid_Position_simple, y= L2FC_A427_ABE_CTRL_plasmid_average_zscore, colour = most_severe_consequence)) + 
+plot1 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting") & Gene == "FGFR1"), aes(x= Amino_Acid_Position_simple, y= L2FC_A427_ABE_CTRL_plasmid_average_zscore, colour = most_severe_consequence)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 scale_shape_manual(values =c(19, 1)) +
@@ -1647,7 +2125,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_CTRL_plasmid_average_zscore < -5,
 theme_classic()
 plot1
 
-plot1 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental) & Gene == "FGFR1"), aes(x= Amino_Acid_Position_simple, y= L2FC_A427_ABE_RMC_plasmid_average_zscore, colour = most_severe_consequence)) + 
+plot1 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting") & Gene == "FGFR1"), aes(x= Amino_Acid_Position_simple, y= L2FC_A427_ABE_RMC_plasmid_average_zscore, colour = most_severe_consequence)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 scale_shape_manual(values =c(19, 1)) +
@@ -1680,7 +2158,7 @@ annotated_data %>%
 
 ```{r}
 #drug versus control and label the resistance residues for ABE A427
-plot1 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_A427_ABE_RMC_plasmid_average_zscore , colour = Gene)) + 
+plot1 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_A427_ABE_RMC_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1689,7 +2167,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_RMC_plasmid_average_zscore > 6 | 
 theme_classic()
 plot1
 
-plot2 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_A427_ABE_BI_plasmid_average_zscore , colour = Gene)) + 
+plot2 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_A427_ABE_BI_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1698,7 +2176,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_BI_plasmid_average_zscore > 6 | L
 theme_classic()
 plot2
 
-plot3 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_A427_ABE_MRTX_plasmid_average_zscore , colour = Gene)) + 
+plot3 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_A427_ABE_MRTX_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1707,7 +2185,7 @@ geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_MRTX_plasmid_average_zscore > 6 |
 theme_classic()
 plot3
 
-plot4 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_A427_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
+plot4 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_A427_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1729,7 +2207,7 @@ annotated_data %>%
 
 ```{r}
 #plot the data with rug plot for controls
-plot1 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_A427_ABE_ACBI3_plasmid_average_zscore, colour = Gene, size = plasmid_vs_A427_ABE_ACBI3_combined_MAGeCK_FDR)) + 
+plot1 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_A427_ABE_ACBI3_plasmid_average_zscore, colour = Gene, size = plasmid_vs_A427_ABE_ACBI3_combined_MAGeCK_FDR)) + 
 geom_point(position = pos) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1741,7 +2219,7 @@ theme_classic() +
   geom_rug(data = subset(annotated_data, gene_alias %in% c("intergenic", "kill_controls")), aes(x = L2FC_A427_ABE_CTRL_plasmid_average_zscore, y = L2FC_A427_ABE_ACBI3_plasmid_average_zscore, colour = gene_alias), show.legend = FALSE)
 plot1
 
-plot2 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_A427_ABE_RMC_plasmid_average_zscore, colour = Gene, size = plasmid_vs_A427_ABE_RMC_combined_MAGeCK_FDR)) + 
+plot2 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_A427_ABE_RMC_plasmid_average_zscore, colour = Gene, size = plasmid_vs_A427_ABE_RMC_combined_MAGeCK_FDR)) + 
 geom_point(position = pos) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1753,7 +2231,7 @@ theme_classic() +
   geom_rug(data = subset(annotated_data, gene_alias %in% c("intergenic", "kill_controls")), aes(x = L2FC_A427_ABE_CTRL_plasmid_average_zscore, y = L2FC_A427_ABE_RMC_plasmid_average_zscore, colour = gene_alias), show.legend = FALSE)
 plot2
 
-plot3 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_A427_ABE_MRTX_plasmid_average_zscore, colour = Gene, size = plasmid_vs_A427_ABE_MRTX_combined_MAGeCK_FDR)) + 
+plot3 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_A427_ABE_MRTX_plasmid_average_zscore, colour = Gene, size = plasmid_vs_A427_ABE_MRTX_combined_MAGeCK_FDR)) + 
 geom_point(position = pos) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1765,7 +2243,7 @@ theme_classic() +
   geom_rug(data = subset(annotated_data, gene_alias %in% c("intergenic", "kill_controls")), aes(x = L2FC_A427_ABE_CTRL_plasmid_average_zscore, y = L2FC_A427_ABE_MRTX_plasmid_average_zscore, colour = gene_alias), show.legend = FALSE)
 plot3
 
-plot4 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_A427_ABE_BI_plasmid_average_zscore, colour = Gene, size = plasmid_vs_A427_ABE_BI_combined_MAGeCK_FDR)) + 
+plot4 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_CTRL_plasmid_average_zscore, y= L2FC_A427_ABE_BI_plasmid_average_zscore, colour = Gene, size = plasmid_vs_A427_ABE_BI_combined_MAGeCK_FDR)) + 
 geom_point(position = pos) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1777,25 +2255,24 @@ theme_classic() +
   geom_rug(data = subset(annotated_data, gene_alias %in% c("intergenic", "kill_controls")), aes(x = L2FC_A427_ABE_CTRL_plasmid_average_zscore, y = L2FC_A427_ABE_BI_plasmid_average_zscore, colour = gene_alias), show.legend = FALSE)
 plot4
 ```
+
 ```{r}
 # make a figure comparing RMC-6236 and ACBI3
-plot1 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_A427_ABE_RMC_plasmid_average_zscore, y= L2FC_A427_ABE_ACBI3_plasmid_average_zscore, colour = Gene)) + 
+plot1 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_RMC_plasmid_average_zscore, y= L2FC_A427_ABE_ACBI3_plasmid_average_zscore, colour = Gene)) + 
 geom_point(position = pos, size = 1, show.legend=FALSE, shape = 1) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
-geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_ACBI3_plasmid_average_zscore > 6 & L2FC_A427_ABE_ACBI3_plasmid_exp1_zscore > 2 & L2FC_A427_ABE_ACBI3_plasmid_exp2_zscore > 2  & plasmid_vs_A427_ABE_ACBI3_combined_MAGeCK_FDR < 0.01 & plasmid_vs_A427_ABE_ACBI3_combined_MAGeCK_p.high < 0.01 & most_severe_consequence == "missense" | L2FC_A427_ABE_RMC_plasmid_average_zscore > 5 & L2FC_A427_ABE_RMC_plasmid_exp1_zscore > 2 & L2FC_A427_ABE_RMC_plasmid_exp2_zscore > 2  & plasmid_vs_A427_ABE_RMC_combined_MAGeCK_FDR < 0.01 & plasmid_vs_A427_ABE_RMC_combined_MAGeCK_p.high < 0.01 & most_severe_consequence == "missense", paste(Gene, Protein_Position),
-                                 ifelse(L2FC_A427_ABE_ACBI3_plasmid_average_zscore > 6 & L2FC_A427_ABE_ACBI3_plasmid_exp1_zscore > 2 & L2FC_A427_ABE_ACBI3_plasmid_exp2_zscore > 2  & plasmid_vs_A427_ABE_ACBI3_combined_MAGeCK_FDR < 0.01 & plasmid_vs_A427_ABE_ACBI3_combined_MAGeCK_p.high < 0.01 & most_severe_consequence != "missense" | L2FC_A427_ABE_RMC_plasmid_average_zscore > 5 & L2FC_A427_ABE_RMC_plasmid_exp1_zscore > 2 & L2FC_A427_ABE_RMC_plasmid_exp2_zscore > 2  & plasmid_vs_A427_ABE_RMC_combined_MAGeCK_FDR < 0.01 & plasmid_vs_A427_ABE_RMC_combined_MAGeCK_p.high < 0.01 & most_severe_consequence != "missense", paste(Gene, most_severe_consequence),
-                                 ""))), size=3, position=pos, max.overlaps = Inf, show.legend=FALSE) +
-scale_size_continuous(trans = "reverse", range = c(0.01, 1.8)) +
-#scale_color_manual(values =c("royalblue", "turquoise3", "orange", "red", "springgreen4", "grey55","brown", "purple", "salmon","red3", "black", "grey", "pink", "green", "blue","yellow","red3","red","grey","purple1","red3","orange4","brown","blue3","black","cyan","magenta","red3", "red")) +
+geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_ACBI3_plasmid_average_zscore > 4.5 & plasmid_vs_A427_ABE_ACBI3_combined_MAGeCK_FDR < 0.1 & plasmid_vs_A427_ABE_ACBI3_combined_MAGeCK_p.high < 0.05 & most_severe_consequence == "missense" & L2FC_H23_ABE_ACBI3_plasmid_average_zscore > 4.5 | L2FC_A427_ABE_RMC_plasmid_average_zscore > 4.5 & plasmid_vs_A427_ABE_RMC_combined_MAGeCK_FDR < 0.1 & plasmid_vs_A427_ABE_RMC_combined_MAGeCK_p.high < 0.05 & most_severe_consequence == "missense" &  L2FC_H23_ABE_RMC_plasmid_average_zscore > 4.5, paste(Gene, Protein_Position),
+                                 ifelse(L2FC_A427_ABE_ACBI3_plasmid_average_zscore > 4.5 & plasmid_vs_A427_ABE_ACBI3_combined_MAGeCK_FDR < 0.1 & plasmid_vs_A427_ABE_ACBI3_combined_MAGeCK_p.high < 0.05 & most_severe_consequence != "missense" & L2FC_H23_ABE_ACBI3_plasmid_average_zscore > 4.5 | L2FC_A427_ABE_RMC_plasmid_average_zscore > 4.5 & plasmid_vs_A427_ABE_RMC_combined_MAGeCK_FDR < 0.1 & plasmid_vs_A427_ABE_RMC_combined_MAGeCK_p.high < 0.05 & most_severe_consequence != "missense" & L2FC_H23_ABE_RMC_plasmid_average_zscore > 4.5, paste(Gene, most_severe_consequence),
+                                 ""))), size=3, position=pos, max.overlaps = Inf, show.legend=FALSE, segment.size = 0.1) +
 theme_classic() +
-  scale_color_manual(values =c("royalblue", "turquoise3", "orange", "springgreen4", "grey55","brown", "purple", "salmon","blue1", "black", "pink", "pink", "green", "blue","yellow","orange","magenta","black","purple1","red3","blue","brown","blue3","black","cyan","magenta", "red")) +
-  xlab("RMC6236 verus plasmid (z-score)") + ylab("ACBI3 versus plasmid (z-score)") + 
+  scale_color_manual(values =c("royalblue", "turquoise3", "orange", "springgreen4", "grey55","brown", "purple", "red","blue1", "black", "pink", "pink", "green", "blue","yellow","orange","magenta","black","purple1","red3","blue","brown","blue3","black","cyan","green4", "salmon")) +
+  xlab("A427 ABE: RMC-6236 versus plasmid (z-score)") + ylab("A427 ABE: ACBI3 versus plasmid (z-score)") + 
          labs(colour = NULL) +
   xlim(-10, 20)+
   ylim(-10, 15)
 plot1
-ggsave("Fig1_scatter_1.eps", width = 5, height = 5, path ="./figures_export")
+ggsave("Fig1_scatter_1.eps", width = 4.5, height = 4.5, path ="./figures_export")
 
 plot2 <- ggplot(subset(annotated_data, gene_alias %in% c("intergenic", "kill_controls")), aes(x=L2FC_A427_ABE_RMC_plasmid_average_zscore, fill = gene_alias)) +
   geom_density(alpha = 0.3, show.legend = FALSE) +
@@ -1804,7 +2281,7 @@ plot2 <- ggplot(subset(annotated_data, gene_alias %in% c("intergenic", "kill_con
     theme_void() +
     xlim(-10, 20)
 plot2
-ggsave("Fig1_density_1.pdf", width = 5, height = 1, path ="./figures_export")
+ggsave("Fig1_density_1.pdf", width = 5, height = 0.5, path ="./figures_export")
 
 plot3 <- ggplot(subset(annotated_data, gene_alias %in% c("intergenic", "kill_controls")), aes(y=L2FC_A427_ABE_ACBI3_plasmid_average_zscore, fill = gene_alias)) +
     geom_density(alpha = 0.3, show.legend = FALSE) +
@@ -1813,12 +2290,158 @@ plot3 <- ggplot(subset(annotated_data, gene_alias %in% c("intergenic", "kill_con
     theme_void() +
     ylim(-10, 15)
 plot3
-ggsave("Fig1_density_2.pdf", width = 1, height = 5, path ="./figures_export")
+ggsave("Fig1_density_2.pdf", width = 0.5, height = 5, path ="./figures_export")
+```
+
+```{r}
+# make a figure comparing RMC-6236 H23 and A427
+plot1 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_RMC_plasmid_average_zscore, y= L2FC_H23_ABE_RMC_plasmid_average_zscore, colour = Gene)) + 
+geom_point(position = pos, size = 1, show.legend=FALSE, shape = 1) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_RMC_plasmid_average_zscore > 3 & L2FC_H23_ABE_RMC_plasmid_average_zscore > 3 & plasmid_vs_A427_ABE_RMC_combined_MAGeCK_FDR < 0.1 & plasmid_vs_A427_ABE_RMC_combined_MAGeCK_p.high < 0.05 & most_severe_consequence == "missense" & plasmid_vs_H23_ABE_RMC_combined_MAGeCK_FDR < 0.1 & plasmid_vs_H23_ABE_RMC_combined_MAGeCK_p.high < 0.05, paste(Gene, Protein_Position),
+                                 ifelse(L2FC_A427_ABE_RMC_plasmid_average_zscore > 3 & L2FC_H23_ABE_RMC_plasmid_average_zscore > 3 & plasmid_vs_A427_ABE_RMC_combined_MAGeCK_FDR < 0.1 & plasmid_vs_A427_ABE_RMC_combined_MAGeCK_p.high < 0.05 & most_severe_consequence == "missense" & plasmid_vs_H23_ABE_RMC_combined_MAGeCK_FDR < 0.1 & plasmid_vs_H23_ABE_RMC_combined_MAGeCK_p.high < 0.05 & most_severe_consequence != "missense", paste(Gene, most_severe_consequence),
+                                 ""))), size=3, position=pos, max.overlaps = Inf, show.legend=FALSE, segment.size = 0.1) +
+theme_classic() +
+  scale_color_manual(values =c("royalblue", "turquoise3", "orange", "springgreen4", "grey55","brown", "purple", "red","blue1", "black", "pink", "pink", "green", "blue","yellow","orange","magenta","black","purple1","red3","blue","brown","blue3","black","cyan","green4", "salmon")) +
+  xlab("A427 ABE: RMC-6236 versus plasmid (z-score)") + ylab("H23 ABE: RMC-6236 versus plasmid (z-score)") + 
+         labs(colour = NULL) +
+  xlim(-10, 20)+
+  ylim(-10, 15)
+plot1
+ggsave("H23_A427_ABE_scatter_rmc6236.eps", width = 4.5, height = 4.5, path ="./figures_export")
+
+plot2 <- ggplot(subset(annotated_data, gene_alias %in% c("intergenic", "kill_controls")), aes(x=L2FC_A427_ABE_RMC_plasmid_average_zscore, fill = gene_alias)) +
+  geom_density(alpha = 0.3, show.legend = FALSE) +
+      scale_fill_manual(values =c("grey", "red3")) +
+  geom_vline(xintercept=c(0,0),linetype="dotted") +
+    theme_void() +
+    xlim(-10, 20)
+plot2
+ggsave("a427_rmc_density.pdf", width = 5, height = 0.5, path ="./figures_export")
+
+plot3 <- ggplot(subset(annotated_data, gene_alias %in% c("intergenic", "kill_controls")), aes(y=L2FC_H23_ABE_RMC_plasmid_average_zscore, fill = gene_alias)) +
+    geom_density(alpha = 0.3, show.legend = FALSE) +
+  scale_fill_manual(values =c("grey", "red3")) +
+  geom_hline(yintercept=c(0,0),linetype="dotted") +
+    theme_void() +
+    ylim(-10, 15)
+plot3
+ggsave("h23_rmc_density.pdf", width = 0.5, height = 5, path ="./figures_export")
+```
+```{r}
+# make a figure comparing ACBI3 H23 and A427
+plot1 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_ACBI3_plasmid_average_zscore, y= L2FC_H23_ABE_ACBI3_plasmid_average_zscore, colour = Gene)) + 
+geom_point(position = pos, size = 1, show.legend=FALSE, shape = 1) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_ACBI3_plasmid_average_zscore > 3 & L2FC_H23_ABE_ACBI3_plasmid_average_zscore > 3 & plasmid_vs_A427_ABE_ACBI3_combined_MAGeCK_FDR < 0.1 & plasmid_vs_A427_ABE_ACBI3_combined_MAGeCK_p.high < 0.05 & most_severe_consequence == "missense" & plasmid_vs_H23_ABE_ACBI3_combined_MAGeCK_FDR < 0.1 & plasmid_vs_H23_ABE_ACBI3_combined_MAGeCK_p.high < 0.05, paste(Gene, Protein_Position),
+                                 ifelse(L2FC_A427_ABE_ACBI3_plasmid_average_zscore > 3 & L2FC_H23_ABE_ACBI3_plasmid_average_zscore > 3 & plasmid_vs_A427_ABE_ACBI3_combined_MAGeCK_FDR < 0.1 & plasmid_vs_A427_ABE_ACBI3_combined_MAGeCK_p.high < 0.05 & most_severe_consequence == "missense" & plasmid_vs_H23_ABE_ACBI3_combined_MAGeCK_FDR < 0.1 & plasmid_vs_H23_ABE_ACBI3_combined_MAGeCK_p.high < 0.05 & most_severe_consequence != "missense", paste(Gene, most_severe_consequence),
+                                 ""))), size=3, position=pos, max.overlaps = Inf, show.legend=FALSE, segment.size = 0.1) +
+theme_classic() +
+  scale_color_manual(values =c("royalblue", "turquoise3", "orange", "springgreen4", "grey55","brown", "purple", "red","blue1", "black", "pink", "pink", "green", "blue","yellow","orange","magenta","black","purple1","red3","blue","brown","blue3","black","cyan","green4", "salmon")) +
+  xlab("A427 ABE: ACBI3 versus plasmid (z-score)") + ylab("H23 ABE: ACBI3 versus plasmid (z-score)") + 
+         labs(colour = NULL) +
+  xlim(-10, 20)+
+  ylim(-10, 15)
+plot1
+ggsave("H23_A427_ABE_scatter_acbi3.eps", width = 4.5, height = 4.5, path ="./figures_export")
+
+plot2 <- ggplot(subset(annotated_data, gene_alias %in% c("intergenic", "kill_controls")), aes(x=L2FC_A427_ABE_ACBI3_plasmid_average_zscore, fill = gene_alias)) +
+  geom_density(alpha = 0.3, show.legend = FALSE) +
+      scale_fill_manual(values =c("grey", "red3")) +
+  geom_vline(xintercept=c(0,0),linetype="dotted") +
+    theme_void() +
+    xlim(-10, 20)
+plot2
+ggsave("a427_acbi3_density.pdf", width = 5, height = 0.5, path ="./figures_export")
+
+plot3 <- ggplot(subset(annotated_data, gene_alias %in% c("intergenic", "kill_controls")), aes(y=L2FC_H23_ABE_ACBI3_plasmid_average_zscore, fill = gene_alias)) +
+    geom_density(alpha = 0.3, show.legend = FALSE) +
+  scale_fill_manual(values =c("grey", "red3")) +
+  geom_hline(yintercept=c(0,0),linetype="dotted") +
+    theme_void() +
+    ylim(-10, 15)
+plot3
+ggsave("h23_acbi3_density.pdf", width = 0.5, height = 5, path ="./figures_export")
+```
+
+```{r}
+# make a figure comparing BI-2865 H23 and A427
+plot1 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_BI_plasmid_average_zscore, y= L2FC_H23_ABE_BI_plasmid_average_zscore, colour = Gene)) + 
+geom_point(position = pos, size = 1, show.legend=FALSE, shape = 1) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_BI_plasmid_average_zscore > 3 & L2FC_H23_ABE_BI_plasmid_average_zscore > 3 & plasmid_vs_A427_ABE_BI_combined_MAGeCK_FDR < 0.1 & plasmid_vs_A427_ABE_BI_combined_MAGeCK_p.high < 0.05 & most_severe_consequence == "missense" & plasmid_vs_H23_ABE_BI_combined_MAGeCK_FDR < 0.1 & plasmid_vs_H23_ABE_BI_combined_MAGeCK_p.high < 0.05, paste(Gene, Protein_Position),
+                                 ifelse(L2FC_A427_ABE_BI_plasmid_average_zscore > 3 & L2FC_H23_ABE_BI_plasmid_average_zscore > 3 & plasmid_vs_A427_ABE_BI_combined_MAGeCK_FDR < 0.1 & plasmid_vs_A427_ABE_BI_combined_MAGeCK_p.high < 0.05 & most_severe_consequence == "missense" & plasmid_vs_H23_ABE_BI_combined_MAGeCK_FDR < 0.1 & plasmid_vs_H23_ABE_BI_combined_MAGeCK_p.high < 0.05 & most_severe_consequence != "missense", paste(Gene, most_severe_consequence),
+                                 ""))), size=3, position=pos, max.overlaps = Inf, show.legend=FALSE, segment.size = 0.1) +
+theme_classic() +
+  scale_color_manual(values =c("royalblue", "turquoise3", "orange", "springgreen4", "grey55","brown", "purple", "red","blue1", "black", "pink", "pink", "green", "blue","yellow","orange","magenta","black","purple1","red3","blue","brown","blue3","black","cyan","green4", "salmon")) +
+  xlab("A427 ABE: BI-2865 versus plasmid (z-score)") + ylab("H23 ABE: BI-2865 versus plasmid (z-score)") + 
+         labs(colour = NULL) +
+  xlim(-10, 20)+
+  ylim(-10, 15)
+plot1
+ggsave("H23_A427_ABE_scatter_bi2865.eps", width = 4.5, height = 4.5, path ="./figures_export")
+
+plot2 <- ggplot(subset(annotated_data, gene_alias %in% c("intergenic", "kill_controls")), aes(x=L2FC_A427_ABE_BI_plasmid_average_zscore, fill = gene_alias)) +
+  geom_density(alpha = 0.3, show.legend = FALSE) +
+      scale_fill_manual(values =c("grey", "red3")) +
+  geom_vline(xintercept=c(0,0),linetype="dotted") +
+    theme_void() +
+    xlim(-10, 20)
+plot2
+ggsave("a427_bi2865_density.pdf", width = 5, height = 0.5, path ="./figures_export")
+
+plot3 <- ggplot(subset(annotated_data, gene_alias %in% c("intergenic", "kill_controls")), aes(y=L2FC_H23_ABE_BI_plasmid_average_zscore, fill = gene_alias)) +
+    geom_density(alpha = 0.3, show.legend = FALSE) +
+  scale_fill_manual(values =c("grey", "red3")) +
+  geom_hline(yintercept=c(0,0),linetype="dotted") +
+    theme_void() +
+    ylim(-10, 15)
+plot3
+ggsave("h23_bi2865_density.pdf", width = 0.5, height = 5, path ="./figures_export")
+```
+```{r}
+# make a figure comparing MRTX replicates in A427 (no H23 results as not screened due to intricsic resistance)
+plot1 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_A427_ABE_MRTX_plasmid_exp1_zscore, y= L2FC_A427_ABE_MRTX_plasmid_exp2_zscore, colour = Gene)) + 
+geom_point(position = pos, size = 1, show.legend=FALSE, shape = 1) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+geom_text_repel(aes(label=ifelse(L2FC_A427_ABE_MRTX_plasmid_exp1_zscore > 3 & L2FC_A427_ABE_MRTX_plasmid_exp2_zscore > 3 & plasmid_vs_A427_ABE_MRTX_combined_MAGeCK_FDR < 0.1 & plasmid_vs_A427_ABE_MRTX_combined_MAGeCK_p.high < 0.05 & most_severe_consequence == "missense", paste(Gene, Protein_Position),
+                              ifelse(L2FC_A427_ABE_MRTX_plasmid_exp1_zscore > 3 & L2FC_A427_ABE_MRTX_plasmid_exp2_zscore > 3 & plasmid_vs_A427_ABE_MRTX_combined_MAGeCK_FDR < 0.1 & plasmid_vs_A427_ABE_MRTX_combined_MAGeCK_p.high < 0.05 & most_severe_consequence != "missense", paste(Gene, most_severe_consequence),
+                                 ""))), size=3, position=pos, max.overlaps = Inf, show.legend=FALSE, segment.size = 0.1) +
+theme_classic() +
+  scale_color_manual(values =c("royalblue", "turquoise3", "orange", "springgreen4", "grey55","brown", "purple", "red","blue1", "black", "pink", "pink", "green", "blue","yellow","orange","magenta","black","purple1","red3","blue","brown","blue3","black","cyan","green4", "salmon")) +
+  xlab("A427 ABE: MRTX1133 versus plasmid R1 (z-score)") + ylab("A427 ABE: MRTX1133 versus plasmid R2 (z-score)") + 
+         labs(colour = NULL) +
+  xlim(-10, 20)+
+  ylim(-10, 15)
+plot1
+ggsave("A427_MRTX_scatter_reps.eps", width = 4.5, height = 4.5, path ="./figures_export")
+
+plot2 <- ggplot(subset(annotated_data, gene_alias %in% c("intergenic", "kill_controls")), aes(x=L2FC_A427_ABE_MRTX_plasmid_exp1_zscore, fill = gene_alias)) +
+  geom_density(alpha = 0.3, show.legend = FALSE) +
+      scale_fill_manual(values =c("grey", "red3")) +
+  geom_vline(xintercept=c(0,0),linetype="dotted") +
+    theme_void() +
+    xlim(-10, 20)
+plot2
+ggsave("a427_mrtx1133_density1.pdf", width = 5, height = 0.5, path ="./figures_export")
+
+plot3 <- ggplot(subset(annotated_data, gene_alias %in% c("intergenic", "kill_controls")), aes(y=L2FC_A427_ABE_MRTX_plasmid_exp2_zscore, fill = gene_alias)) +
+    geom_density(alpha = 0.3, show.legend = FALSE) +
+  scale_fill_manual(values =c("grey", "red3")) +
+  geom_hline(yintercept=c(0,0),linetype="dotted") +
+    theme_void() +
+    ylim(-10, 15)
+plot3
+ggsave("a427_mrtx1133_density2.pdf", width = 0.5, height = 5, path ="./figures_export")
 ```
 
 ```{r}
 #drug versus control and label the resistance residues for ABE H23
-plot1 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_H23_ABE_CTRL_plasmid_average_zscore, y= L2FC_H23_ABE_RMC_plasmid_average_zscore , colour = Gene)) + 
+plot1 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_H23_ABE_CTRL_plasmid_average_zscore, y= L2FC_H23_ABE_RMC_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1827,7 +2450,7 @@ geom_text_repel(aes(label=ifelse(L2FC_H23_ABE_RMC_plasmid_average_zscore > 6 | L
 theme_classic()
 plot1
 
-plot2 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_H23_ABE_CTRL_plasmid_average_zscore, y= L2FC_H23_ABE_BI_plasmid_average_zscore , colour = Gene)) + 
+plot2 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_H23_ABE_CTRL_plasmid_average_zscore, y= L2FC_H23_ABE_BI_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1836,7 +2459,7 @@ geom_text_repel(aes(label=ifelse(L2FC_H23_ABE_BI_plasmid_average_zscore > 6 | L2
 theme_classic()
 plot2
 
-plot3 <- ggplot(subset(annotated_data, sgRNA_type %in% c(experimental)), aes(x= L2FC_H23_ABE_CTRL_plasmid_average_zscore, y= L2FC_H23_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
+plot3 <- ggplot(subset(annotated_data, gRNA_class %in% c("targeting")), aes(x= L2FC_H23_ABE_CTRL_plasmid_average_zscore, y= L2FC_H23_ABE_ACBI3_plasmid_average_zscore , colour = Gene)) + 
 geom_point(position = pos, alpha = 1, size =2) +
 geom_hline(yintercept=c(0,0),linetype="dotted") +
 geom_vline(xintercept=c(0,0),linetype="dotted") +
@@ -1903,7 +2526,7 @@ Cas9 <- as_tibble(read.csv("Cas9_data.csv", stringsAsFactors = FALSE, header = T
 BE <- 
   BE %>%
   rename(gene = Gene) %>%
-  select(gene, Protein_Position, sgRNA_ID, contains("L2FC")) %>%
+  select(gene, most_severe_consequence, Protein_Position, sgRNA_ID, contains("L2FC")) %>%
   rename(amino_acid_position = Protein_Position) %>%
   distinct()
 
@@ -2099,7 +2722,7 @@ plot5
 ```{r}
 #select targets
 targets <- data %>%
-  filter(sgRNA_type %in% c(experimental)) %>%
+  filter(gRNA_class %in% c("targeting")) %>%
            select(Gene) %>%
   rename(gene = Gene) %>%
   distinct()
@@ -2110,7 +2733,6 @@ multi_modal_BE_nested <-
   mutate(amino_acid_position_simple = str_split(amino_acid_position, ";") |>
       map(~ as.numeric(str_trim(.x))) |>
       map_dbl(~ if (all(is.na(.x))) NA_real_ else mean(.x, na.rm = TRUE)))
-
 ```
 
 ```{r}
@@ -2227,15 +2849,14 @@ plot5
 
 ```{r}
 #make a figure of the selected genes
-
 graphing_subset <- 
   multi_modal_BE_nested %>%
   filter(gene %in% c("KRAS", "FGFR1", "PPIA", "VHL")) %>%
-  select(gene, sgRNA_ID, amino_acid_position, amino_acid_position_simple, contains(c("average_zscore", "neg.lfc_MAGeCK"))) %>%
+  select(gene, sgRNA_ID, amino_acid_position, amino_acid_position_simple, most_severe_consequence, contains(c("average_zscore", "neg.lfc_MAGeCK"))) %>%
   select(!c("neg.lfc_MAGeCK_Control_T0")) %>%
   distinct()
 
-id_cols <- c("sgRNA_ID", "gene","amino_acid_position","amino_acid_position_simple") %>% 
+id_cols <- c("sgRNA_ID", "gene","amino_acid_position","amino_acid_position_simple", "most_severe_consequence") %>% 
   intersect(names(graphing_subset))
 
 long_zscore <- graphing_subset %>%
@@ -2314,13 +2935,13 @@ plot1 <- ggplot(
   geom_point(position = pos, shape = 1) +
   geom_hline(yintercept = 0, linetype = "dotted") +
   geom_text_repel(
-    aes(label = ifelse(A427_zscore > 3 & H23_zscore > 3 & gene !="VHL" | A427_zscore > 5 & H23_zscore > 5, paste(amino_acid_position), "")),
+    aes(label = ifelse(A427_zscore > 3 & H23_zscore > 3 & most_severe_consequence == "missense" & gene != "VHL"| A427_zscore > 5 & H23_zscore > 5 & most_severe_consequence == "missense", paste(amino_acid_position), "")),
     size = 2.5, position = pos, max.overlaps = Inf
   ) +
   scale_colour_gradient2(
-    low = "blue", mid = "grey70", high = "red",
+    low = "royalblue", mid = "grey70", high = "red",
     midpoint = 0,
-    limits = c(-max_abs, max_abs),     # comment this line out if you don't want symmetric limits
+    #limits = c(-max_abs, max_abs),     # comment this line out if you don't want symmetric limits
   ) +
   scale_size_continuous(range = c(0.1, 3)) +
   labs(colour = "H23 z-score", size = "",
@@ -2384,7 +3005,6 @@ KRAS <-
 Coverage <-
   left_join(Protein, KRAS)
 
-
 #summarise the BE coverage data with a histogram
 plot1 <- ggplot(Coverage, aes(x=amino_acid_position)) +
 geom_histogram(binwidth = 1) +
@@ -2396,13 +3016,12 @@ plot1
 
 ```{r}
 #heatmap KRAS with missing values
-
 all_pos <- seq(min(heat_map$Protein_Position, na.rm = TRUE),
                max(heat_map$Protein_Position, na.rm = TRUE))
 
 df_numeric <- heat_map %>%
   mutate(Protein_Position = as.integer(Protein_Position)) %>%
-  select(Protein_Position, ends_with("plasmid_average_zscore")) %>%
+  select(Protein_Position, ends_with("_average_zscore")) %>%
   group_by(Protein_Position) %>%
   summarise(
     across(
@@ -2431,6 +3050,45 @@ plot1 <- pheatmap(
   color = colorRampPalette(rev(brewer.pal(11, "RdBu")))(200),
   border_color = NA,
   main = "Heatmap of KRAS"
+)
+plot1
+```
+
+```{r}
+#heatmap KRAS for Y64 only
+heat_map <-
+  annotated_data %>%
+  select(Gene, guide, sgRNA_ID, Protein_Position, most_severe_consequence, contains("_zscore")) %>%
+  filter(Gene == "KRAS") %>%
+  filter(str_detect(Protein_Position, "64")) %>%
+    filter(str_detect(Protein_Position, "164") == FALSE) %>%
+  mutate(id = paste(Protein_Position, sgRNA_ID)) %>%
+  select(id,  contains("_average_zscore")) %>%
+    distinct()
+
+# Matrix (positions as columns after transpose)
+df_matrix <- as.matrix(heat_map %>% column_to_rownames("id"))
+df_matrix <- df_matrix[, order(as.numeric(colnames(df_matrix))), drop = FALSE]
+df_matrix <- t(df_matrix)
+
+# Make colour scale symmetric around 0
+max_val <- max(abs(df_matrix), na.rm = TRUE)          # largest |z|
+breaks  <- seq(-max_val, max_val, length.out = 201)   # 200 intervals
+cols    <- colorRampPalette(rev(brewer.pal(11, "RdBu")))(200)
+
+# Heatmap 
+plot1 <- pheatmap(
+  df_matrix,
+  scale = "none",
+  cluster_cols = FALSE,
+  cluster_rows = TRUE,
+  show_rownames = TRUE,
+  show_colnames = TRUE,
+  na_col = "grey85",
+  color = cols,
+  breaks = breaks,          # <- this centres at 0
+  border_color = NA,
+  main = "", 
 )
 plot1
 ```
