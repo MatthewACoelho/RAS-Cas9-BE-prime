@@ -369,6 +369,9 @@ rep2 <-
 
 rep_correlation <- left_join(rep1, rep2) %>% 
   filter(is.na(L2FC_A427_CTRL_plasmid_exp1_zscore) ==FALSE & is.na(L2FC_A427_CTRL_plasmid_exp2_zscore)==FALSE )
+
+rep_correlation
+
 r2 <- cor(rep_correlation$L2FC_A427_CTRL_plasmid_exp1_zscore, rep_correlation$L2FC_A427_CTRL_plasmid_exp2_zscore, method = "pearson")
 ```
 
@@ -386,6 +389,9 @@ rep2 <-
 
 rep_correlation <- left_join(rep1, rep2) %>% 
   filter(is.na(L2FC_A427_CTRL_plasmid_exp1_zscore) ==FALSE & is.na(L2FC_A427_CTRL_plasmid_exp2_zscore)==FALSE )
+
+rep_correlation
+
 r3 <- cor(rep_correlation$L2FC_A427_CTRL_plasmid_exp1_zscore, rep_correlation$L2FC_A427_CTRL_plasmid_exp2_zscore, method = "pearson")
 ```
 
@@ -461,7 +467,7 @@ input_dir <- "./MAGeCK/results/MAGeCK/AVERAGE"
 # List all read_count.tsv files in the directory
 files <- list.files(input_dir, pattern = "_average.gene_summary.txt$", full.names = TRUE)
 
-MAGeCK_A3BI3 <- 
+MAGeCK_ACBI3 <- 
   as_tibble(read.delim("./MAGeCK/results/MAGeCK/AVERAGE/A427Cas9_Control_vs_A427Cas9_A3BI3_average.gene_summary.txt", stringsAsFactors = FALSE, header = TRUE, sep ="\t"))
 
 MAGeCK_RMC6236 <- 
@@ -547,18 +553,18 @@ plot1
 ```
 
 ```{r}
-#wrangling MAGeCK dataframes - significance A3BI3
-MAGeCK_A3BI3 <- dplyr::rename(MAGeCK_A3BI3, gene = id)
-MAGeCK_A3BI3 <- mutate(MAGeCK_A3BI3, pvalue = ifelse(neg.lfc< 0, neg.p.value, pos.p.value))
-MAGeCK_A3BI3 <- mutate(MAGeCK_A3BI3, fdr = ifelse(neg.lfc< 0, neg.fdr, pos.fdr))
-MAGeCK_A3BI3 <- mutate(MAGeCK_A3BI3, neg_log_10_p = (-1*log10(pvalue)))
-MAGeCK_A3BI3 <- mutate(MAGeCK_A3BI3, legend = ifelse(neg.lfc>0 & pvalue <0.05 & fdr <0.1, "enriched", ifelse(neg.lfc<0 & pvalue <0.05 & fdr <0.1, "depleted", "not significant")))
-MAGeCK_A3BI3 <- mutate(MAGeCK_A3BI3, rank = rank(neg.lfc))
+#wrangling MAGeCK dataframes - significance ACBI3
+MAGeCK_ACBI3 <- dplyr::rename(MAGeCK_ACBI3, gene = id)
+MAGeCK_ACBI3 <- mutate(MAGeCK_ACBI3, pvalue = ifelse(neg.lfc< 0, neg.p.value, pos.p.value))
+MAGeCK_ACBI3 <- mutate(MAGeCK_ACBI3, fdr = ifelse(neg.lfc< 0, neg.fdr, pos.fdr))
+MAGeCK_ACBI3 <- mutate(MAGeCK_ACBI3, neg_log_10_p = (-1*log10(pvalue)))
+MAGeCK_ACBI3 <- mutate(MAGeCK_ACBI3, legend = ifelse(neg.lfc>0 & pvalue <0.05 & fdr <0.1, "enriched", ifelse(neg.lfc<0 & pvalue <0.05 & fdr <0.1, "depleted", "not significant")))
+MAGeCK_ACBI3 <- mutate(MAGeCK_ACBI3, rank = rank(neg.lfc))
 ```
 
 ```{r}
-#volcano plot A3BI3
-plot1 <- ggplot(subset(MAGeCK_A3BI3), aes(x=neg.lfc, y= neg_log_10_p, size = fdr, colour = legend)) +
+#volcano plot ACBI3
+plot1 <- ggplot(subset(MAGeCK_ACBI3), aes(x=neg.lfc, y= neg_log_10_p, size = fdr, colour = legend)) +
 geom_point(shape =1) +
 geom_text_repel(aes(label=ifelse(neg.lfc > 2 & neg_log_10_p > 5 |  legend == "depleted" & neg.lfc < -2 | legend != "not significant" & neg_log_10_p > 4 |  gene %in% c("NF1", "FGFR1"), gene, "")), size=3, colour =  "black", max.overlaps = Inf) +
 theme_classic() +
@@ -615,12 +621,12 @@ plot1
 
 ```{r}
 #elbow plot
-plot1 <- ggplot(MAGeCK_A3BI3, aes(x=rank, y= neg.lfc, size = fdr)) +
+plot1 <- ggplot(MAGeCK_ACBI3, aes(x=rank, y= neg.lfc, size = fdr)) +
 geom_point(shape = 1) +
-geom_text_repel(aes(label=ifelse(rank <5 | legend !="not significant" & rank > 18855, gene, "")), size=3, max.overlaps = Inf, colour = "salmon2") +
+geom_text_repel(aes(label=ifelse(rank <5 | legend !="not significant" & rank > 18854, gene, "")), size=3, max.overlaps = Inf, colour = "salmon2") +
   theme_classic() +
     scale_size(transform = "reverse", range = c(0.1,3) ) +
-labs(title= "") + xlab("gene rank") + ylab("A427 Cas9: ACBI3 versus plasmid (L2FC)") +
+labs(title= "") + xlab("gene rank") + ylab("A427 Cas9: ACBI3 versus control (L2FC)") +
   labs(size = "FDR")
 plot1
 ggsave("Fig1a.1.eps", width = 3, height = 4, path ="./figures_export")
@@ -630,10 +636,10 @@ ggsave("Fig1a.1.eps", width = 3, height = 4, path ="./figures_export")
 #elbow plot
 plot1 <- ggplot(MAGeCK_MRTX1133, aes(x=rank, y= neg.lfc, size = fdr)) +
 geom_point(shape = 1) +
-geom_text_repel(aes(label=ifelse(rank <5 | legend !="not significant" & rank > 18855, gene, "")), size=3, max.overlaps = Inf, colour = "salmon2") +
+geom_text_repel(aes(label=ifelse(rank <5 | legend !="not significant" & rank > 18854, gene, "")), size=3, max.overlaps = Inf, colour = "salmon2") +
   theme_classic() +
     scale_size(transform = "reverse", range = c(0.1,3) ) +
-labs(title= "") + xlab("gene rank") + ylab("A427 Cas9: MRTX1133 versus plasmid (L2FC)") +
+labs(title= "") + xlab("gene rank") + ylab("A427 Cas9: MRTX1133 versus control (L2FC)") +
   labs(size = "FDR")
 plot1
 ggsave("Fig1a.2.eps", width = 3, height = 4, path ="./figures_export")
@@ -643,10 +649,10 @@ ggsave("Fig1a.2.eps", width = 3, height = 4, path ="./figures_export")
 #elbow plot
 plot1 <- ggplot(MAGeCK_BI2865, aes(x=rank, y= neg.lfc, size = fdr)) +
 geom_point(shape = 1) +
-geom_text_repel(aes(label=ifelse(rank <5 | legend !="not significant" & rank > 18855, gene, "")), size=3, max.overlaps = Inf, colour = "salmon2") +
+geom_text_repel(aes(label=ifelse(rank <5 | legend !="not significant" & rank > 18854, gene, "")), size=3, max.overlaps = Inf, colour = "salmon2") +
   theme_classic() +
     scale_size(transform = "reverse", range = c(0.1,3) ) +
-labs(title= "") + xlab("gene rank") + ylab("A427 Cas9: BI-2865 versus plasmid (L2FC)") +
+labs(title= "") + xlab("gene rank") + ylab("A427 Cas9: BI-2865 versus control (L2FC)") +
     labs(size = "FDR")
 plot1
 ggsave("Fig1a.3.eps", width = 3, height = 4, path ="./figures_export")
@@ -656,10 +662,10 @@ ggsave("Fig1a.3.eps", width = 3, height = 4, path ="./figures_export")
 #elbow plot
 plot1 <- ggplot(MAGeCK_RMC6236, aes(x=rank, y= neg.lfc, size = fdr)) +
 geom_point( shape = 1) +
-geom_text_repel(aes(label=ifelse(rank <5 | legend !="not significant" & rank > 18855, gene, "")), size=3, max.overlaps = Inf, colour = "salmon2") +
+geom_text_repel(aes(label=ifelse(rank <5 | legend !="not significant" & rank > 18854, gene, "")), size=3, max.overlaps = Inf, colour = "salmon2") +
   theme_classic() +
     scale_size(transform = "reverse", range = c(0.1,3) ) +
-labs(title= "") + xlab("gene rank") + ylab("A427 Cas9: RMC-6236 versus plasmid (L2FC)") +
+labs(title= "") + xlab("gene rank") + ylab("A427 Cas9: RMC-6236 versus control (L2FC)") +
     labs(size = "FDR")
 plot1
 ggsave("Fig1a.4.eps", width = 3, height = 4, path ="./figures_export")
@@ -669,7 +675,7 @@ ggsave("Fig1a.4.eps", width = 3, height = 4, path ="./figures_export")
 #join lfc tables together
 
 # List of tables
-tables <- list(MAGeCK_A3BI3 = MAGeCK_A3BI3, MAGeCK_MRTX1133 = MAGeCK_MRTX1133, MAGeCK_BI2865 = MAGeCK_BI2865, MAGeCK_RMC6236 = MAGeCK_RMC6236, MAGeCK_Control_plasmid = MAGeCK_Control_plasmid, MAGeCK_Control_T0 = MAGeCK_Control_T0)
+tables <- list(MAGeCK_ACBI3 = MAGeCK_ACBI3, MAGeCK_MRTX1133 = MAGeCK_MRTX1133, MAGeCK_BI2865 = MAGeCK_BI2865, MAGeCK_RMC6236 = MAGeCK_RMC6236, MAGeCK_Control_plasmid = MAGeCK_Control_plasmid, MAGeCK_Control_T0 = MAGeCK_Control_T0)
 
 # Function to join tables with suffixes
 merged_df <- reduce(names(tables), function(df, name) {
@@ -686,16 +692,16 @@ print(merged_df)
 #hits
 hits <- 
   merged_df %>%
-  filter(legend_MAGeCK_RMC6236 !="not significant" | legend_MAGeCK_BI2865 !="not significant" | legend_MAGeCK_A3BI3 !="not significant" | legend_MAGeCK_MRTX1133 !="not significant") %>%
+  filter(legend_MAGeCK_RMC6236 !="not significant" | legend_MAGeCK_BI2865 !="not significant" | legend_MAGeCK_ACBI3 !="not significant" | legend_MAGeCK_MRTX1133 !="not significant") %>%
   select(gene)
 ```
 
 ```{r}
 #dot plots
-plot1 <- ggplot(merged_df, aes(y=neg.lfc_MAGeCK_A3BI3, x= neg.lfc_MAGeCK_RMC6236)) +
+plot1 <- ggplot(merged_df, aes(y=neg.lfc_MAGeCK_ACBI3, x= neg.lfc_MAGeCK_RMC6236)) +
 geom_point(shape = 1, size =1) +
     scale_size(transform = "reverse", range = c(0.1,3) ) +
-labs(title= "") + ylab("A427 Cas9: ACBI3 versus plasmid (L2FC)") + xlab("A427 Cas9: RMC-6236 versus plasmid (L2FC)") +
+labs(title= "") + ylab("A427 Cas9: ACBI3 versus control (L2FC)") + xlab("A427 Cas9: RMC-6236 versus control (L2FC)") +
     geom_text_repel(aes(label=ifelse(gene %in% hits$gene, gene, "")), size=3, colour =  "salmon2", max.overlaps = Inf) +
     geom_hline(yintercept=c(0,0), linetype="dotted", colour = "grey45") +
   geom_vline(xintercept=c(0,0), linetype="dotted", colour = "grey45") +
@@ -706,7 +712,7 @@ ggsave("Fig1b.1.eps", width = 4, height = 4, path ="./figures_export")
 plot2 <- ggplot(merged_df, aes(x=neg.lfc_MAGeCK_BI2865, y= neg.lfc_MAGeCK_RMC6236)) +
 geom_point(shape = 1) +
     scale_size(transform = "reverse", range = c(0.1,3) ) +
-labs(title= "") + xlab("neg.lfc_MAGeCK_A3BI3") + ylab("neg.lfc_MAGeCK_RMC6236") +
+labs(title= "") + xlab("neg.lfc_MAGeCK_ACBI3") + ylab("neg.lfc_MAGeCK_RMC6236") +
       geom_text_repel(aes(label=ifelse(gene %in% hits$gene, gene, "")), size=3, colour =  "salmon2", max.overlaps = Inf) +
   geom_hline(yintercept=c(0,0), linetype="dotted", colour = "grey45") +
   geom_vline(xintercept=c(0,0), linetype="dotted", colour = "grey45") +
@@ -716,7 +722,7 @@ plot2
 plot3 <- ggplot(merged_df, aes(x=neg.lfc_MAGeCK_MRTX1133, y= neg.lfc_MAGeCK_RMC6236)) +
 geom_point(shape = 1) +
     scale_size(transform = "reverse", range = c(0.1,3) ) +
-labs(title= "") + xlab("neg.lfc_MAGeCK_A3BI3") + ylab("neg.lfc_MAGeCK_MRTX1133") +
+labs(title= "") + xlab("neg.lfc_MAGeCK_ACBI3") + ylab("neg.lfc_MAGeCK_MRTX1133") +
       geom_text_repel(aes(label=ifelse(gene %in% hits$gene, gene, "")), size=3, colour =  "salmon2", max.overlaps = Inf) +
   geom_hline(yintercept=c(0,0), linetype="dotted", colour = "grey45") +
   geom_vline(xintercept=c(0,0), linetype="dotted", colour = "grey45") +
@@ -733,20 +739,20 @@ labs(title= "") + xlab("neg.lfc_MAGeCK_BI2865") + ylab("neg.lfc_MAGeCK_MRTX1133"
   theme_classic()
 plot4
 
-plot5 <- ggplot(merged_df, aes(x=neg.lfc_MAGeCK_A3BI3, y= neg.lfc_MAGeCK_MRTX1133)) +
+plot5 <- ggplot(merged_df, aes(x=neg.lfc_MAGeCK_ACBI3, y= neg.lfc_MAGeCK_MRTX1133)) +
 geom_point(shape = 1) +
     scale_size(transform = "reverse", range = c(0.1,3) ) +
-labs(title= "") + xlab("neg.lfc_MAGeCK_A3BI3") + ylab("neg.lfc_MAGeCK_MRTX1133") +
+labs(title= "") + xlab("neg.lfc_MAGeCK_ACBI3") + ylab("neg.lfc_MAGeCK_MRTX1133") +
       geom_text_repel(aes(label=ifelse(gene %in% hits$gene, gene, "")), size=3, colour =  "salmon2", max.overlaps = Inf) +
   geom_hline(yintercept=c(0,0), linetype="dotted", colour = "grey45") +
   geom_vline(xintercept=c(0,0), linetype="dotted", colour = "grey45") +
   theme_classic()
 plot5
 
-plot6 <- ggplot(merged_df, aes(x=neg.lfc_MAGeCK_BI2865, y= neg.lfc_MAGeCK_A3BI3)) +
+plot6 <- ggplot(merged_df, aes(x=neg.lfc_MAGeCK_BI2865, y= neg.lfc_MAGeCK_ACBI3)) +
 geom_point(shape = 1) +
     scale_size(transform = "reverse", range = c(0.1,3) ) +
-labs(title= "") + xlab("neg.lfc_MAGeCK_BI2865") + ylab("neg.lfc_MAGeCK_A3BI3") +
+labs(title= "") + xlab("neg.lfc_MAGeCK_BI2865") + ylab("neg.lfc_MAGeCK_ACBI3") +
     geom_text_repel(aes(label=ifelse(gene %in% hits$gene, gene, "")), size=3, colour =  "salmon2", max.overlaps = Inf) +
   geom_hline(yintercept=c(0,0), linetype="dotted", colour = "grey45") +
   geom_vline(xintercept=c(0,0), linetype="dotted", colour = "grey45") +
@@ -785,10 +791,10 @@ labs(title= "") + ylab("neg.lfc_MAGeCK_Control_plasmid") + xlab("neg.lfc_MAGeCK_
   theme_classic()
 plot1
 
-plot1 <- ggplot(merged_df, aes(y=neg.lfc_MAGeCK_Control_plasmid, x= neg.lfc_MAGeCK_A3BI3)) +
+plot1 <- ggplot(merged_df, aes(y=neg.lfc_MAGeCK_Control_plasmid, x= neg.lfc_MAGeCK_ACBI3)) +
 geom_point(shape = 1, size =1) +
     scale_size(transform = "reverse", range = c(0.1,3) ) +
-labs(title= "") + ylab("neg.lfc_MAGeCK_Control_plasmid") + xlab("neg.lfc_MAGeCK_A3BI3") +
+labs(title= "") + ylab("neg.lfc_MAGeCK_Control_plasmid") + xlab("neg.lfc_MAGeCK_ACBI3") +
     geom_text_repel(aes(label=ifelse(gene %in% c("ARID1A", "KEAP1", "TP53", "NF1"), gene, "")), size=3, colour =  "salmon2", max.overlaps = Inf) +
     geom_hline(yintercept=c(0,0), linetype="dotted", colour = "grey45") +
   geom_vline(xintercept=c(0,0), linetype="dotted", colour = "grey45") +
@@ -806,7 +812,7 @@ heat_map <-
   rename(control = neg.lfc_MAGeCK_Control_plasmid) %>%
   rename(MRTX1133 = neg.lfc_MAGeCK_MRTX1133) %>%
   rename("RMC-6236" = neg.lfc_MAGeCK_RMC6236) %>%
-  rename(ACBI3 = neg.lfc_MAGeCK_A3BI3) %>%
+  rename(ACBI3 = neg.lfc_MAGeCK_ACBI3) %>%
   rename("BI-2865" = neg.lfc_MAGeCK_BI2865)
 
 df_numeric <- heat_map %>%
@@ -867,7 +873,7 @@ heat_map <-
   rename(control = neg.lfc_MAGeCK_Control_plasmid) %>%
   rename(MRTX1133 = neg.lfc_MAGeCK_MRTX1133) %>%
   rename("RMC-6236" = neg.lfc_MAGeCK_RMC6236) %>%
-  rename(ACBI3 = neg.lfc_MAGeCK_A3BI3) %>%
+  rename(ACBI3 = neg.lfc_MAGeCK_ACBI3) %>%
   rename("BI-2865" = neg.lfc_MAGeCK_BI2865)
 
 df_numeric <- heat_map %>%
@@ -971,7 +977,7 @@ data %>%
 
 merged_df %>%
     filter(gene %in% c("ILK", "PTEN", "FGFR1", "CDK13", "PTPN11")) %>%
-  select(gene, pos.lfc_MAGeCK_MRTX1133, neg.lfc_MAGeCK_A3BI3, neg.lfc_MAGeCK_RMC6236, neg.lfc_MAGeCK_BI2865, neg.lfc_MAGeCK_Control_plasmid, neg.fdr_MAGeCK_Control_T0)
+  select(gene, pos.lfc_MAGeCK_MRTX1133, neg.lfc_MAGeCK_ACBI3, neg.lfc_MAGeCK_RMC6236, neg.lfc_MAGeCK_BI2865, neg.lfc_MAGeCK_Control_plasmid, neg.fdr_MAGeCK_Control_T0)
 
 data %>%
     filter(gene %in% c("ILK", "PTEN", "FGFR1", "CDK13")) %>%
@@ -982,7 +988,7 @@ data %>%
 
 ```{r}
 merged_df %>%
-  select(gene, pos.lfc_MAGeCK_A3BI3, pos.lfc_MAGeCK_RMC6236, pos.lfc_MAGeCK_MRTX1133, pos.lfc_MAGeCK_BI2865) %>%
+  select(gene, pos.lfc_MAGeCK_ACBI3, pos.lfc_MAGeCK_RMC6236, pos.lfc_MAGeCK_MRTX1133, pos.lfc_MAGeCK_BI2865) %>%
   filter(str_detect(gene, "B4GALT") | gene == "PTPN11" | gene == "ILK")
 ```
 
