@@ -55,7 +55,9 @@ KRAS_pyc_forward_151  <-
   mutate(sgrna_seqs = paste0(gRNA, scaffold, extension, evopreq)) %>% #concatamer
     mutate(sgrna_seqs = str_to_upper(sgrna_seqs)) %>% #upper case
   mutate(sgrna_seqs = substr(sgrna_seqs, 0, 151)) %>% #151 bp reads
-  mutate(len = nchar(sgrna_seqs)) %>%
+  mutate(len = nchar(sgrna_seqs))
+
+KRAS_pyc_forward_151 %>%
   write.csv("KRAS_pyc_forward_151.csv")
 ```
 
@@ -762,6 +764,9 @@ join_data_filtered %>%
 
 ```{r}
 #filter our low counts for WT and mut sensor to increase sensor editing accuracy
+join_data_filtered %>%
+  filter(A427_PE_FLARE_Lib_sorted_R1_end_summed_counts < 10 | A427_PE_FLARE_Lib_sorted_R2_end_summed_counts < 10)
+
 join_data_filtered <-
   join_data_filtered %>%
   filter(A427_PE_FLARE_Lib_sorted_R1_end_summed_counts > 10 & A427_PE_FLARE_Lib_sorted_R2_end_summed_counts > 10)
@@ -772,9 +777,6 @@ join_data_filtered %>%
 
 ```{r}
 #filter on low reads counts
-join_data_filtered %>%
-  filter(Plasmid_8132stdy_pyc_reads <= 300) 
-
 join_data_filtered %>%
   filter(Plasmid_8132stdy_pyc_reads <= 400) 
 
@@ -858,6 +860,7 @@ n <- plot_data %>%
 
 #pearson
 r1 <- cor(plot_data$A427_PE_FLARE_Lib_sorted_R1_end_corrected_editing, plot_data$A427_PE_FLARE_Lib_sorted_R2_end_corrected_editing, method = "pearson")
+cor.test(plot_data$A427_PE_FLARE_Lib_sorted_R1_end_corrected_editing, plot_data$A427_PE_FLARE_Lib_sorted_R2_end_corrected_editing, method = "pearson", use="complete.obs")
 
 #plot
 plot1 <- ggplot(plot_data, aes(x=A427_PE_FLARE_Lib_sorted_R1_end_corrected_editing, y = A427_PE_FLARE_Lib_sorted_R2_end_corrected_editing)) +
@@ -874,6 +877,8 @@ ggsave("Fig2_scatter.eps", width = 3, height = 3, path ="./figures_export")
 ```{r}
 #Pearson correlation - reads
 r1 <- cor(join_data_filtered$A427_PE_FLARE_Lib_R1_T0_pyc_reads, join_data_filtered$A427_PE_FLARE_Lib_R2_T0_pyc_reads, method = "pearson")
+cor.test(join_data_filtered$A427_PE_FLARE_Lib_R1_T0_pyc_reads, join_data_filtered$A427_PE_FLARE_Lib_R2_T0_pyc_reads, method = "pearson", use="complete.obs")
+r1
 ```
 
 ```{r}
@@ -955,9 +960,11 @@ ggsave("prime_reads_Pearson.eps", width = 8, height = 8, path ="./figures_export
 ```{r}
 #Pearson correlation - z-scores
 r2 <- cor(join_data_filtered$L2FC_A427_PE_FLARE_T0_Par_exp1_zscore, join_data_filtered$L2FC_A427_PE_FLARE_T0_Par_exp2_zscore, method = "pearson")
+cor.test(join_data_filtered$L2FC_A427_PE_FLARE_T0_Par_exp1_zscore, join_data_filtered$L2FC_A427_PE_FLARE_T0_Par_exp2_zscore, method = "pearson", use="complete.obs")
 
 #pearson
 r3 <- cor(join_data_filtered$L2FC_A427_PE_RMC_T0_Par_exp1_zscore, join_data_filtered$L2FC_A427_PE_RMC_T0_Par_exp2_zscore, method = "pearson")
+cor.test(join_data_filtered$L2FC_A427_PE_RMC_T0_Par_exp1_zscore, join_data_filtered$L2FC_A427_PE_RMC_T0_Par_exp2_zscore, method = "pearson", use="complete.obs")
 ```
 
 ```{r}
@@ -966,10 +973,15 @@ missense <-
   join_data_filtered %>%
   filter(mutation_type == "missense")
 
+missense
+join_data_filtered
+
 r4 <- cor(missense$L2FC_A427_PE_FLARE_T0_Par_exp1_zscore, missense$L2FC_A427_PE_FLARE_T0_Par_exp2_zscore, method = "pearson")
+cor.test(missense$L2FC_A427_PE_FLARE_T0_Par_exp1_zscore, missense$L2FC_A427_PE_FLARE_T0_Par_exp2_zscore, method = "pearson", use="complete.obs")
 
 #pearson
 r5 <- cor(missense$L2FC_A427_PE_RMC_T0_Par_exp1_zscore, missense$L2FC_A427_PE_RMC_T0_Par_exp2_zscore, method = "pearson")
+cor.test(missense$L2FC_A427_PE_RMC_T0_Par_exp1_zscore, missense$L2FC_A427_PE_RMC_T0_Par_exp2_zscore, method = "pearson", use="complete.obs")
 ```
 
 ```{r}
@@ -1064,6 +1076,7 @@ control_edits <-
   select(corrected_editing)
 
 stats1 <- t.test(control_edits, PEFLARE_edits, paired = FALSE, alternative = c("two.sided"))
+stats1
 
 # Make a nice label for the plot
 p_lab <- 
@@ -1109,6 +1122,18 @@ theme_classic() +
     geom_text_repel(aes(label=ifelse(L2FC_A427_PE_FLARE_T0_Par_average_zscore > 3, mutation, "")), size=3, max.overlaps = Inf, segment.size = 0.2) +
     facet_wrap(~mutation_type)
 plot1
+```
+```{r}
+#get rid of mut1/2/3 nomenclature in mutation from pridict for clarity when plotting 
+join_data_filtered_editing <-
+join_data_filtered_editing %>%
+mutate(mutation = str_replace(mutation, "mut1", "")) %>%
+  mutate(mutation = str_replace(mutation, "mut2", "")) %>%
+    mutate(mutation = str_replace(mutation, "mut3", "")) %>%
+      mutate(mutation = str_replace(mutation, "mut4", "")) %>%
+      mutate(mutation = str_replace(mutation, "mut5", "")) %>%
+      mutate(mutation = str_replace(mutation, "mut6", "")) %>%
+        mutate(mutation = str_replace(mutation, "_2", ""))
 ```
 
 ```{r}
@@ -1179,18 +1204,91 @@ filter(A427_PE_FLARE_Lib_sorted_end_average_corrected_editing >75 & gene == "KRA
 ```
 
 ```{r}
+#stats for boxplot - mean values - FOLD-CHANGE - KRAS only
+#all
+KRAS_all_syn <-
+  join_data_filtered %>%
+filter(gene == "KRAS" | mutation_type == "non_targeting" | mutation_type == "non_coding") %>%
+  filter(mutation_type == "synonymous") %>%
+   select(L2FC_A427_PE_FLARE_T0_Par_average_zscore) %>%
+  summarise(mean(L2FC_A427_PE_FLARE_T0_Par_average_zscore))
+
+KRAS_all_ns <-
+  join_data_filtered %>%
+filter(gene == "KRAS" | mutation_type == "non_targeting" | mutation_type == "non_coding") %>%
+  filter(mutation_type == "nonsense") %>%
+   select(L2FC_A427_PE_FLARE_T0_Par_average_zscore) %>%
+    summarise(mean(L2FC_A427_PE_FLARE_T0_Par_average_zscore))
+
+#>25 % intended editing
+KRAS_25_syn <-
+  join_data_filtered_editing %>%
+filter(gene == "KRAS" | mutation_type == "non_targeting" | mutation_type == "non_coding") %>%
+  filter(mutation_type == "synonymous")  %>%
+   select(L2FC_A427_PE_FLARE_T0_Par_average_zscore)%>%
+  summarise(mean(L2FC_A427_PE_FLARE_T0_Par_average_zscore))
+
+KRAS_25_ns <-
+  join_data_filtered_editing %>%
+filter(gene == "KRAS" | mutation_type == "non_targeting" | mutation_type == "non_coding") %>%
+  filter(mutation_type == "nonsense")  %>%
+   select(L2FC_A427_PE_FLARE_T0_Par_average_zscore)%>%
+  summarise(mean(L2FC_A427_PE_FLARE_T0_Par_average_zscore))
+
+#>50 % intended editing
+KRAS_50_syn <-
+join_data_filtered_editing %>%
+filter(A427_PE_FLARE_Lib_sorted_end_average_corrected_editing >50 & gene == "KRAS" | mutation_type == "non_targeting" | A427_PE_FLARE_Lib_sorted_end_average_corrected_editing >50 & mutation_type == "non_coding") %>%  
+    filter(mutation_type == "synonymous")  %>%
+   select(L2FC_A427_PE_FLARE_T0_Par_average_zscore)%>%
+  summarise(mean(L2FC_A427_PE_FLARE_T0_Par_average_zscore))
+
+KRAS_50_ns <-
+join_data_filtered_editing %>%
+filter(A427_PE_FLARE_Lib_sorted_end_average_corrected_editing >50 & gene == "KRAS" | mutation_type == "non_targeting" | A427_PE_FLARE_Lib_sorted_end_average_corrected_editing >50 & mutation_type == "non_coding") %>%  
+    filter(mutation_type == "nonsense")  %>%
+   select(L2FC_A427_PE_FLARE_T0_Par_average_zscore)%>%
+  summarise(mean(L2FC_A427_PE_FLARE_T0_Par_average_zscore))
+
+#>75 % intended editing
+KRAS_75_syn <-
+join_data_filtered_editing %>%
+filter(A427_PE_FLARE_Lib_sorted_end_average_corrected_editing >75 & gene == "KRAS" | mutation_type == "non_targeting" | A427_PE_FLARE_Lib_sorted_end_average_corrected_editing >75 & mutation_type == "non_coding") %>%  
+    filter(mutation_type == "synonymous")  %>%
+   select(L2FC_A427_PE_FLARE_T0_Par_average_zscore)%>%
+  summarise(mean(L2FC_A427_PE_FLARE_T0_Par_average_zscore))
+
+KRAS_75_ns <-
+join_data_filtered_editing %>%
+filter(A427_PE_FLARE_Lib_sorted_end_average_corrected_editing >75 & gene == "KRAS" | mutation_type == "non_targeting" | A427_PE_FLARE_Lib_sorted_end_average_corrected_editing >75 & mutation_type == "non_coding") %>%  
+    filter(mutation_type == "nonsense")  %>%
+   select(L2FC_A427_PE_FLARE_T0_Par_average_zscore)%>%
+  summarise(mean(L2FC_A427_PE_FLARE_T0_Par_average_zscore))
+
+#foldchange on mean from syn and ns variants in KRAS
+foldchange1 <-
+  KRAS_all_ns/KRAS_all_syn
+foldchange2 <-
+  KRAS_25_ns/KRAS_25_syn
+foldchange3 <-
+  KRAS_50_ns/KRAS_50_syn
+foldchange4 <-
+  KRAS_75_ns/KRAS_75_syn
+```
+
+```{r}
 #stats for boxplot - p value (synonymous versus nonsense) - KRAS only
 #all
 KRAS_all_syn <-
   join_data_filtered %>%
 filter(gene == "KRAS" | mutation_type == "non_targeting" | mutation_type == "non_coding") %>%
-  filter(mutation_type == "nonsense") %>%
+  filter(mutation_type == "synonymous") %>%
    select(L2FC_A427_PE_FLARE_T0_Par_average_zscore)
 
 KRAS_all_ns <-
   join_data_filtered %>%
 filter(gene == "KRAS" | mutation_type == "non_targeting" | mutation_type == "non_coding") %>%
-  filter(mutation_type == "synonymous")  %>%
+  filter(mutation_type == "nonsense") %>%
    select(L2FC_A427_PE_FLARE_T0_Par_average_zscore)
 
 #>25 % intended editing
@@ -1261,7 +1359,8 @@ labs(x= "A427 PE: control versus time 0 (z-score)") +
   labs(y = "", title = paste0("all KRAS pegRNAs", ", n = ", n1)) +
     xlim(-6,6) +
 theme_classic() +
-  annotate("text",  x = 5, y = 4.5, label = p_lab1, parse = TRUE, size = 4)
+  annotate("text",  x = 5, y = 4.25, label = p_lab1, parse = TRUE, size = 4) +
+  annotate("text",  x = 5, y = 4.75, label = paste(round(foldchange1, 2), "-fold"), parse = FALSE, size = 4)
 plot1
 ggsave("controls_box_ext.eps", width = 5, height = 3.5, path ="./figures_export")
 
@@ -1277,7 +1376,8 @@ labs(x= "A427 PE: control versus time 0 (z-score)") +
   labs(y = "", title = paste0("KRAS pegRNAs >25% editing", ", n = ", n2)) +
     xlim(-6,6) +
 theme_classic() +
-  annotate("text",  x = 5, y = 4.5, label = p_lab2, parse = TRUE, size = 4)
+ annotate("text",  x = 5, y = 4.25, label = p_lab2, parse = TRUE, size = 4) +
+  annotate("text",  x = 5, y = 4.75, label = paste(round(foldchange2, 2), "-fold"), parse = FALSE, size = 4)
 plot1
 ggsave("controls_box_editing_ext.eps", width = 5, height = 3.5, path ="./figures_export")
 
@@ -1293,7 +1393,8 @@ labs(x= "A427 PE: control versus time 0 (z-score)") +
   labs(y = "", title = paste0("KRAS pegRNAs >50% editing", ", n = ", n3)) +
     xlim(-6,6) +
 theme_classic() +
-  annotate("text",  x = 5, y = 4.5, label = p_lab3, parse = TRUE, size = 4)
+annotate("text",  x = 5, y = 4.25, label = p_lab3, parse = TRUE, size = 4) +
+  annotate("text",  x = 5, y = 4.75, label = paste(round(foldchange3, 2), "-fold"), parse = FALSE, size = 4)
 plot1
 ggsave("controls_box_editing_50_ext.eps", width = 5, height = 3.5, path ="./figures_export")
 
@@ -1309,23 +1410,20 @@ labs(x= "A427 PE: control versus time 0 (z-score)") +
   labs(y = "", title = paste0("KRAS pegRNAs >75% editing", ", n = ", n4)) +
     xlim(-6,6) +
 theme_classic() +
-  annotate("text",  x = 5, y = 4.5, label = p_lab4, parse = TRUE, size = 4)
+annotate("text",  x = 5, y = 4.25, label = p_lab4, parse = TRUE, size = 4) +
+  annotate("text",  x = 5, y = 4.75, label = paste(round(foldchange4, 2), "-fold"), parse = FALSE, size = 4)
 plot1
 ggsave("controls_box_editing_high_ext.eps", width = 5, height = 3.5, path ="./figures_export")
 ```
 
 ```{r}
 # PE Coverage Estimation
-
-#read in the protein datafram output csv for BEstimate for CBE and ABE
-#these assume a leninet window of bases from 3-9 nt in the gRNA are edited - base editing activity window
-
-#filter CBE data to include only non-synonymous variants with numerical Protein_Position
+#filter  data to include only non-synonymous variants
 heat_map <- 
   join_data_filtered %>%
   filter(gene == "KRAS") %>%
   arrange(amino_acid_position) %>%
-  filter(mutation_type == "missense") %>%
+  filter(mutation_type != "synonymous") %>%
     distinct()
 
 # define protein of interest "Protein" length in amino acids from Uniprot (here e.g. is 200 residues)
@@ -1334,14 +1432,14 @@ Protein <- data.frame(amino_acid_position = 1:Length) %>%
   mutate(amino_acid_position = as.numeric(amino_acid_position))
 
 #join the reference amino acid table to the coverage table twith the gRNAs by Protein_Position
-
 Coverage <-
   left_join(Protein, heat_map)
+Coverage
 
 #identify the number of missing amino acids (NA gRNA)
 Missing <- 
   Coverage %>%
-  filter(is.na(amino_acid_position) == TRUE) %>%
+  filter(is.na(mutation) == TRUE) %>%
   dplyr::count()
 
 #calculate the % coverage by non-synonymous amino acid mutations with CBE and ABE
@@ -1556,26 +1654,26 @@ ggsave("FLARE_reps_ext_1.eps", width = 3.5, height = 3.5, path ="./figures_expor
 
 ```{r}
 #make a figure for MRTX1133 example
-plot1 <- ggplot(subset(join_data_filtered_editing, gene == "KRAS"), aes(y=L2FC_A427_PE_MRTX_T0_Par_exp1_zscore, x = L2FC_A427_PE_MRTX_T0_Par_exp2_zscore, colour = mutation_type)) +
+plot1 <- ggplot(subset(join_data_filtered_editing, gene %in% c("KRAS", "non-targeting")), aes(y=L2FC_A427_PE_MRTX_T0_Par_exp1_zscore, x = L2FC_A427_PE_MRTX_T0_Par_exp2_zscore, colour = mutation_type)) +
 geom_point(size = 0.5, shape = 1, show.legend = FALSE) +
 theme_classic() +
   labs(colour = "consequence") +
      geom_hline(yintercept=c(0,0),linetype="dotted") +
        geom_vline(xintercept=c(0,0),linetype="dotted") +
-    scale_color_manual(values =c("black","grey60", "red3", "royalblue")) +
+    scale_color_manual(values =c("black","grey50", "red3", "royalblue", "grey80")) +
     xlab("MRTX1133 versus T0_Par R1 (z-score)") + ylab("MRTX1133 versus T0_Par R2 (z-score)") +
-geom_text_repel(aes(label=ifelse(L2FC_A427_PE_MRTX_T0_Par_exp1_zscore >2 & L2FC_A427_PE_MRTX_T0_Par_exp2_zscore >2, mutation, "")), size=2.5, max.overlaps = Inf, show.legend = FALSE, segment.size = 0.1) +
+geom_text_repel(aes(label=ifelse(L2FC_A427_PE_MRTX_T0_Par_exp1_zscore >2 & L2FC_A427_PE_MRTX_T0_Par_exp2_zscore >2, mutation, "")), size=2.5, max.overlaps = Inf, show.legend = TRUE, segment.size = 0.1) +
   xlim(-5, 8) +
   ylim(-5, 8)
 plot1
 
-plot1 <- ggplot(subset(join_data_filtered_editing, gene == "KRAS"), aes(y=L2FC_A427_PE_ACBI3_T0_Par_average_zscore, x = L2FC_A427_PE_RMC_T0_Par_average_zscore, colour = mutation_type)) +
+plot1 <- ggplot(subset(join_data_filtered_editing, gene %in% c("KRAS", "non-targeting")), aes(y=L2FC_A427_PE_ACBI3_T0_Par_average_zscore, x = L2FC_A427_PE_RMC_T0_Par_average_zscore, colour = mutation_type)) +
 geom_point(size = 0.5, shape = 1, show.legend = FALSE) +
 theme_classic() +
   labs(colour = "consequence") +
      geom_hline(yintercept=c(0,0),linetype="dotted") +
        geom_vline(xintercept=c(0,0),linetype="dotted") +
-    scale_color_manual(values =c("black","grey60", "red3", "royalblue")) +
+    scale_color_manual(values =c("black","purple", "grey75", "red3", "royalblue")) +
     xlab("RMC-6236 versus T0 (z-score)") + ylab("ACBI3 versus T0 (z-score)") +
 geom_text_repel(aes(label=ifelse(L2FC_A427_PE_ACBI3_T0_Par_average_zscore >4 | L2FC_A427_PE_RMC_T0_Par_average_zscore >4, mutation, "")), size=2.5, max.overlaps = Inf, show.legend = FALSE, segment.size = 0.1) +
   xlim(-5, 8) +
@@ -1649,29 +1747,29 @@ theme_classic() +
   geom_text_repel(aes(label=ifelse(L2FC_A427_PE_MRTX_T0_Par_average_zscore > 3, paste(mutation, gene), "")), size=3, max.overlaps = Inf)
 plot1
 
-plot1 <- ggplot(join_data_filtered, aes(x=L2FC_A427_PE_FLARE_T0_Par_average_zscore, y = L2FC_A427_PE_BI_T0_Par_average_zscore, colour = gene)) +
+plot2 <- ggplot(join_data_filtered, aes(x=L2FC_A427_PE_FLARE_T0_Par_average_zscore, y = L2FC_A427_PE_BI_T0_Par_average_zscore, colour = gene)) +
 geom_point() +
 theme_classic() +
    geom_hline(yintercept=c(0,0),linetype="dotted") +
   geom_vline(xintercept=c(0,0),linetype="dotted") +
   geom_text_repel(aes(label=ifelse(L2FC_A427_PE_BI_T0_Par_average_zscore > 3, paste(mutation, gene), "")), size=3, max.overlaps = Inf)
-plot1
+plot2
 
-plot1 <- ggplot(join_data_filtered, aes(x=L2FC_A427_PE_FLARE_T0_Par_average_zscore, y = L2FC_A427_PE_ACBI3_T0_Par_average_zscore, colour = gene)) +
+plot3 <- ggplot(join_data_filtered, aes(x=L2FC_A427_PE_FLARE_T0_Par_average_zscore, y = L2FC_A427_PE_ACBI3_T0_Par_average_zscore, colour = gene)) +
 geom_point() +
 theme_classic() +
    geom_hline(yintercept=c(0,0),linetype="dotted") +
   geom_vline(xintercept=c(0,0),linetype="dotted") +
   geom_text_repel(aes(label=ifelse(L2FC_A427_PE_ACBI3_T0_Par_average_zscore > 3, paste(mutation, gene), "")), size=3, max.overlaps = Inf)
-plot1
+plot3
 
-plot1 <- ggplot(join_data_filtered, aes(x=L2FC_A427_PE_FLARE_T0_Par_average_zscore, y = L2FC_A427_PE_RMC_T0_Par_average_zscore, colour = gene)) +
+plot4 <- ggplot(join_data_filtered, aes(x=L2FC_A427_PE_FLARE_T0_Par_average_zscore, y = L2FC_A427_PE_RMC_T0_Par_average_zscore, colour = gene)) +
 geom_point() +
 theme_classic() +
    geom_hline(yintercept=c(0,0),linetype="dotted") +
   geom_vline(xintercept=c(0,0),linetype="dotted") +
   geom_text_repel(aes(label=ifelse(L2FC_A427_PE_RMC_T0_Par_average_zscore > 3, paste(mutation, gene), "")), size=3, max.overlaps = Inf)
-plot1
+plot4
 ```
 
 ```{r}
@@ -2037,6 +2135,16 @@ Feature_barcode_library_pegRNAs
 Feature_barcode_library_pegRNAs %>%
     select(id, name, read, pattern, sequence, feature_type, target_gene_id, target_gene_name) %>%
   write.csv("Feature_barcode_library_pegRNAs.csv", row.names=FALSE)
+
+#NB: CellRanger 10 only allowed Non-Targeting and not "non-targeting" in the feature_barcode file
+```
+
+```{r}
+#write pycroquet 151 forward library for validation screen of sclib in A427 and PC9 cells
+#Aviti 300 bp run 
+KRAS_pyc_forward_151 %>%
+  filter(id %in% annotated_ordered_library$id) %>%
+  write.csv("pycroquet_151bp_KRASsclib.csv", row.names=FALSE)
 ```
 
 ```{r}
@@ -2235,7 +2343,7 @@ plot_data %>%
 
 ```{r}
 # crispresso2 Pooled prepare files quantifying between pos 3 and position 48 of the sensor and taking fastqs with 50 reads
-#this is in line iwth the max extension boundaries vefore and after the edit in the senor
+#this is in line with the max extension boundaries vefore and after the edit in the sensor
 
 scaffold <- str_to_upper("gtttaagagCTATGCTGGAAACAGCATAGCAAGTTTAAATAAGGCTAGTCCGTTATCAACTTGAAAAAGTGGCACCGAGTCGgtgc")
 
@@ -2403,8 +2511,25 @@ plot1
 
 ```{r}
 #make a csv file with the PE data so we can join it to the Cas9 and BE datasets
-join_data %>%
-write.csv("PE_data.csv")
+join_data_filtered_editing %>%
+  colnames()
+
+# rename BI-2863 to BI-2865 (correct)
+names(join_data_filtered_editing) <- 
+  gsub("_2863", "_2865", names(join_data_filtered_editing))
+
+#clean up the columns for the Supplemtnary Table
+join_data_filtered_editing %>%
+  select(!c("extension_before_variant", "extension_after_variant", "extension1_in_sensor", "extension2_in_sensor", "nucleotide_position")) %>% 
+  select(
+  -contains("unintended"),
+  -contains("_sec_"),
+  -contains("summed_counts"),
+  -contains("Count"),
+  -contains("COSMIC_mutation"),
+  -contains("RPM", ignore.case = FALSE)
+) %>%
+write.csv("PE_data.csv", row.names=FALSE)
 ```
 
 ```{r}
@@ -2658,7 +2783,7 @@ join_data_filtered_editing %>%
 resistance
 sensitising
 
-#combine resitance and sensitising to make "hits"
+#combine resistance and sensitising to make "hits"
 hits <- bind_rows(resistance, sensitising)
 hits
 ```
@@ -2909,16 +3034,6 @@ KRAS_counts <- as_tibble(read.csv("KRAS_mutationsThuNov2713_05_092025.csv", stri
 counts <- 
   bind_rows(NF1_counts, EGFR_counts, ALK_counts, TP53_counts, ARID1A_counts, KEAP1_counts, PTEN_counts, BRAF_counts, KRAS_counts)
 
-join_data_filtered_plotting <-
-  join_data_filtered_plotting %>%
-mutate(mutation = str_replace(mutation, "mut1", "")) %>%
-  mutate(mutation = str_replace(mutation, "mut2", "")) %>%
-    mutate(mutation = str_replace(mutation, "mut3", "")) %>%
-      mutate(mutation = str_replace(mutation, "mut4", "")) %>%
-      mutate(mutation = str_replace(mutation, "mut5", "")) %>%
-      mutate(mutation = str_replace(mutation, "mut6", "")) %>%
-        mutate(mutation = str_replace(mutation, "_2", ""))
-
 #left_join
 join_data_filtered_plotting <- 
   left_join(join_data_filtered_plotting, counts)
@@ -2937,16 +3052,6 @@ join_data_filtered_plotting
 
 ```{r}
 #join to the long table
-df_long_filtered <- 
-  df_long_filtered %>%
-mutate(mutation = str_replace(mutation, "mut1", "")) %>%
-  mutate(mutation = str_replace(mutation, "mut2", "")) %>%
-    mutate(mutation = str_replace(mutation, "mut3", "")) %>%
-      mutate(mutation = str_replace(mutation, "mut4", "")) %>%
-      mutate(mutation = str_replace(mutation, "mut5", "")) %>%
-      mutate(mutation = str_replace(mutation, "mut6", "")) %>%
-          mutate(mutation = str_replace(mutation, "_2", ""))
-
 df_long_filtered <- 
   left_join(df_long_filtered, join_data_filtered_plotting)
 
@@ -3062,7 +3167,6 @@ scale_fill_gradient(
   name = "Cas9 LFC",
   low = "black", high = "grey80", na.value = "white")
 plot1
-
 ggsave("Fig2_TP53_dots.eps", width = 15.5, height = 4.5, path ="./figures_export")
 ```
 
@@ -3133,7 +3237,7 @@ df_long %>%
       mutate(class = ifelse(str_detect(mutation, "R68T"), "shared", class)) %>%
       mutate(class = ifelse(amino_acid_position == "13", "driver", class)) %>%
       mutate(class = ifelse(str_detect(mutation, "G12"), "driver", class)) %>%
-      mutate(mutation = str_remove(mutation, "_2")) %>% #remove this feature in the mutaiton name so it joins with COSMIC
+      mutate(mutation = str_remove(mutation, "_2")) %>% #remove this feature in the mutation name so it joins with COSMIC
   arrange(amino_acid_position) #into position order
 
 #change labels to mutations, not long distinct mutation_id
@@ -3327,4 +3431,1151 @@ plot1 <- ggplot(subset(join_data_filtered_editing, gene %in% c("TP53", "BRAF")),
   ylab("log10[dN/dS]") +
   facet_wrap(~gene)
 plot1
+```
+```{r}
+#check Q61 editing
+  join_data_filtered %>%
+  select(gene, amino_acid_position, mutation, id, L2FC_A427_PE_FLARE_T0_Par_average_zscore, L2FC_A427_PE_MRTX_T0_Par_average_zscore, L2FC_A427_PE_RMC_T0_Par_average_zscore, L2FC_A427_PE_ACBI3_T0_Par_average_zscore, A427_PE_FLARE_Lib_sorted_end_average_corrected_editing) %>%
+  filter(gene=="KRAS") %>%
+  filter(amino_acid_position == "61") %>%
+  arrange(desc(A427_PE_FLARE_Lib_sorted_end_average_corrected_editing))
+
+#check A146 editing
+  join_data_filtered %>%
+  select(gene, amino_acid_position, mutation, id, L2FC_A427_PE_FLARE_T0_Par_average_zscore, L2FC_A427_PE_MRTX_T0_Par_average_zscore, L2FC_A427_PE_RMC_T0_Par_average_zscore, L2FC_A427_PE_ACBI3_T0_Par_average_zscore, A427_PE_FLARE_Lib_sorted_end_average_corrected_editing) %>%
+  filter(gene=="KRAS") %>%
+  filter(amino_acid_position == "146") %>%
+  arrange(desc(A427_PE_FLARE_Lib_sorted_end_average_corrected_editing))
+  
+  #check K117 editing
+  join_data_filtered %>%
+  select(gene, amino_acid_position, mutation, id, L2FC_A427_PE_FLARE_T0_Par_average_zscore, L2FC_A427_PE_MRTX_T0_Par_average_zscore, L2FC_A427_PE_RMC_T0_Par_average_zscore, L2FC_A427_PE_ACBI3_T0_Par_average_zscore, A427_PE_FLARE_Lib_sorted_end_average_corrected_editing) %>%
+  filter(gene=="KRAS") %>%
+  filter(amino_acid_position == "117") %>%
+  arrange(desc(A427_PE_FLARE_Lib_sorted_end_average_corrected_editing))
+  
+  #check A59 editing (driver)
+  join_data_filtered %>%
+  select(gene, amino_acid_position, mutation, id, L2FC_A427_PE_FLARE_T0_Par_average_zscore, L2FC_A427_PE_MRTX_T0_Par_average_zscore, L2FC_A427_PE_RMC_T0_Par_average_zscore, L2FC_A427_PE_ACBI3_T0_Par_average_zscore, A427_PE_FLARE_Lib_sorted_end_average_corrected_editing) %>%
+  filter(gene=="KRAS") %>%
+  filter(amino_acid_position == "59") %>%
+  arrange(desc(A427_PE_FLARE_Lib_sorted_end_average_corrected_editing))
+  
+  #check Y96 editing (resistance to KRAS G12C inhibitors)
+  join_data_filtered %>%
+  select(gene, amino_acid_position, mutation, id, L2FC_A427_PE_FLARE_T0_Par_average_zscore, L2FC_A427_PE_MRTX_T0_Par_average_zscore, L2FC_A427_PE_RMC_T0_Par_average_zscore, L2FC_A427_PE_ACBI3_T0_Par_average_zscore, A427_PE_FLARE_Lib_sorted_end_average_corrected_editing) %>%
+  filter(gene=="KRAS") %>%
+  filter(amino_acid_position == "96") %>%
+  arrange(desc(A427_PE_FLARE_Lib_sorted_end_average_corrected_editing))
+  
+   #check Y64 editing (resistance to KRAS inhibitors)
+  join_data_filtered %>%
+  select(gene, amino_acid_position, mutation, mutation_type, id, L2FC_A427_PE_FLARE_T0_Par_average_zscore, L2FC_A427_PE_MRTX_T0_Par_average_zscore, L2FC_A427_PE_RMC_T0_Par_average_zscore, L2FC_A427_PE_ACBI3_T0_Par_average_zscore, A427_PE_FLARE_Lib_sorted_end_average_corrected_editing) %>%
+  filter(gene=="KRAS") %>%
+  filter(amino_acid_position == "64") %>%
+    filter(mutation_type == "missense") %>%
+  arrange(desc(A427_PE_FLARE_Lib_sorted_end_average_corrected_editing))
+```
+
+```{r}
+#compute distances of drug to each KRAS residue in PyMol crystal structures 9BG0 and 8QVU
+RMC_distances <- 
+  as_tibble(read.csv("RMC6236_distances.csv", stringsAsFactors = FALSE, header = TRUE))
+
+ACBI3_distances <- 
+  as_tibble(read.csv("ACBI3_distances.csv", stringsAsFactors = FALSE, header = TRUE))
+
+RMC_distances <-
+RMC_distances %>%
+  mutate(gene = "KRAS") %>%
+  dplyr::rename(amino_acid_position = resi) %>%
+  dplyr::rename(RMC6236_distance = min_sidechain_distance) %>%
+  select(!chain)
+  
+ACBI3_distances <-
+ACBI3_distances %>%
+  mutate(gene = "KRAS") %>%
+  dplyr::rename(amino_acid_position = resi) %>%
+  dplyr::rename(ACBI3_distance = min_sidechain_distance) %>%
+  select(!chain)
+
+#join distances together into one table
+drug_distances <-
+  left_join(RMC_distances, ACBI3_distances)
+```
+
+```{r}
+#join distances to the prime editing z-scores
+PE_data_join <-
+  join_data_filtered_editing %>%
+  select(gene, amino_acid_position, mutation, id, L2FC_A427_PE_RMC_T0_Par_average_zscore, L2FC_A427_PE_ACBI3_T0_Par_average_zscore, A427_PE_FLARE_Lib_sorted_end_average_corrected_editing) %>%
+  filter(gene=="KRAS")
+
+drug_distance_zscores <-
+  left_join(PE_data_join, drug_distances)
+
+drug_distance_zscores
+```
+
+```{r}
+#plot distance versus z-score for ACBI3 and RMC-6236
+plot1 <- ggplot(drug_distance_zscores, aes(x = RMC6236_distance, y = L2FC_A427_PE_RMC_T0_Par_average_zscore)) +
+geom_pointdensity(size = 0.5) +
+      geom_hline(yintercept = 0, linetype = "dashed") +
+theme_classic() +
+   xlab("min. RMC-6236 KRAS side chain distance (Å)") +
+  ylab("RMC-6236 versus parental T0 (z-score)") +
+  labs(title = "crystal structure 9BG0", size = 3) +
+    geom_text_repel(aes(label=ifelse(amino_acid_position %in% c("71", "64") & L2FC_A427_PE_RMC_T0_Par_average_zscore > 0 | L2FC_A427_PE_RMC_T0_Par_average_zscore >4, paste(amino_acid_position), "")), size=2.5, segment.size=0.1, max.overlaps = Inf) +
+    scale_color_viridis_c(option = "magma", direction = 1, name = "density")
+plot1
+ggsave("9BG0.eps", width = 5, height = 3.5, path ="./figures_export")
+
+plot2 <- ggplot(drug_distance_zscores, aes(x = ACBI3_distance, y = L2FC_A427_PE_ACBI3_T0_Par_average_zscore)) +
+geom_pointdensity(size = 0.5) +
+      geom_hline(yintercept = 0, linetype = "dashed") +
+theme_classic() +
+   xlab("min. ACBI3 KRAS side chain distance (Å)") +
+  ylab("ACBI3 versus parental T0 (z-score)") +
+   labs(title = "crystal structure 8QVU", size = 3) +
+    geom_text_repel(aes(label=ifelse(amino_acid_position %in% c("71", "64") & L2FC_A427_PE_ACBI3_T0_Par_average_zscore >0 | L2FC_A427_PE_ACBI3_T0_Par_average_zscore >4, paste(amino_acid_position), "")), size=2.5, segment.size=0.1, max.overlaps = Inf) +
+    scale_color_viridis_c(option = "magma", direction = 1, name = "density")
+plot2
+ggsave("8QVU.eps", width = 5, height = 3.5, path ="./figures_export")
+```
+```{r}
+#read in the pridict scores and off-targets for RAS prime library
+pridict_scores <- as_tibble(read.csv("pegRNA_Twist_12k_251124_with_pridict2_scores.csv", stringsAsFactors = FALSE, header = TRUE))
+off_targets <- as_tibble(read.csv("pegRNA_Twist_12k_251124_off_targets.csv", stringsAsFactors = FALSE, header = TRUE))
+
+pridict_scores <-
+  pridict_scores %>%
+  select(c(Pridict.HEK.score, id, mutation, pegRNA, gene, gRNA, VEP.info, Pridict.HEK.rank)) 
+
+off_targets <-
+  off_targets %>%
+  select(c(id, mutation, pegRNA, gene, gRNA, exact, mm1, mm2, mm3, mm4, PAM.right, gRNA_20bp)) 
+
+pridict_scores %>%
+  filter(is.na(Pridict.HEK.score))
+
+join_data_filtered <-
+  left_join(join_data_filtered, pridict_scores)
+
+join_data_filtered <-
+  left_join(join_data_filtered, off_targets)
+```
+
+```{r}
+#plot scores versus z-score
+plot1 <- ggplot(join_data_filtered, aes(x = Pridict.HEK.score, y = A427_PE_FLARE_Lib_sorted_end_average_corrected_editing)) +
+geom_pointdensity(size = 0.5) +
+    geom_hline(yintercept=c(25),linetype="dotted") +
+theme_classic() +
+   xlab("PRIDICT score (HEK293T)") +
+  ylab("average sensor editing (%)") +
+   labs(title = "", size = 3) +
+    scale_color_viridis_c(option = "magma", direction = 1, name = "density")
+plot1
+ggsave("pridict_scores.eps", width = 4.5, height = 3, path ="./figures_export")
+```
+
+```{r}
+#calculate percentage of pegRNAs with editing >25 % in pridict score >70
+join_data_filtered %>%
+  count()
+
+join_data_filtered %>%
+  filter(A427_PE_FLARE_Lib_sorted_end_average_corrected_editing >25) %>%
+  count()
+
+high_scoring <- 
+  join_data_filtered %>%
+  filter(Pridict.HEK.score >70) %>%
+  count()
+
+high_scoring_and_editing <- 
+  join_data_filtered %>%
+  filter(A427_PE_FLARE_Lib_sorted_end_average_corrected_editing >25 & Pridict.HEK.score >70) %>%
+  count()
+
+high_scoring
+high_scoring_and_editing
+high_scoring_and_editing/high_scoring*100
+```
+
+```{r}
+#investigate off-targets
+plot1 <- ggplot(join_data_filtered, aes(x = exact, y = L2FC_A427_PE_RMC_plasmid_average_zscore)) +
+geom_pointdensity(size = 0.5) +
+theme_classic() +
+   xlab("PRIDICT score (HEK293T)") +
+  ylab("average sensor editing (%)") +
+   labs(title = "", size = 3) +
+   
+    scale_color_viridis_c(option = "magma", direction = 1, name = "density")
+plot1
+```
+
+```{r}
+#investigate off-targets
+#all manual guides for mutant alleles
+join_data_filtered %>%
+  filter(exact < 1)
+
+#non-targeting and some others
+join_data_filtered %>%
+  filter(is.na(exact))
+
+#off_target hits
+join_data_filtered %>%
+  filter(exact > 1)
+
+#off_target hits with high z-scores
+join_data_filtered %>%
+  filter(exact > 1) %>%
+  filter(L2FC_A427_PE_FLARE_plasmid_average_zscore >2 | L2FC_A427_PE_RMC_plasmid_average_zscore >2 | L2FC_A427_PE_ACBI3_plasmid_average_zscore >2 | L2FC_A427_PE_MRTX_plasmid_average_zscore >2 | L2FC_A427_PE_BI_plasmid_average_zscore >2 ) %>%
+  select(gene, id, exact, gRNA, gRNA_20bp, mutation, mutation_type, VEP.info, L2FC_A427_PE_FLARE_plasmid_average_zscore, L2FC_A427_PE_RMC_plasmid_average_zscore, L2FC_A427_PE_ACBI3_plasmid_average_zscore, L2FC_A427_PE_MRTX_plasmid_average_zscore, L2FC_A427_PE_BI_plasmid_average_zscore)
+
+#check each individual hit with BLAST n
+#some have mutliple hits and high z-score but the  PBS  will have low homology and they are intronic so likely on-target
+```
+
+```{r}
+#investigate VEP
+#splice
+join_data_filtered %>%
+  filter(str_detect(VEP.info, "splice"))
+  
+#splice pegRNAs with high z-scores
+join_data_filtered %>%
+  filter(str_detect(VEP.info, "splice")) %>%
+  filter(L2FC_A427_PE_FLARE_plasmid_average_zscore >2 | L2FC_A427_PE_RMC_plasmid_average_zscore >2 | L2FC_A427_PE_ACBI3_plasmid_average_zscore >2 | L2FC_A427_PE_MRTX_plasmid_average_zscore >2 | L2FC_A427_PE_BI_plasmid_average_zscore >2  | L2FC_A427_PE_FLARE_plasmid_average_zscore < -2 | L2FC_A427_PE_RMC_plasmid_average_zscore < -2  | L2FC_A427_PE_ACBI3_plasmid_average_zscore < -2  | L2FC_A427_PE_MRTX_plasmid_average_zscore < -2  | L2FC_A427_PE_BI_plasmid_average_zscore < -2 ) %>%
+  select(gene, id, VEP.info, gRNA, gRNA_20bp, mutation, mutation_type, VEP.info, L2FC_A427_PE_FLARE_plasmid_average_zscore, L2FC_A427_PE_RMC_plasmid_average_zscore, L2FC_A427_PE_ACBI3_plasmid_average_zscore, L2FC_A427_PE_MRTX_plasmid_average_zscore, L2FC_A427_PE_BI_plasmid_average_zscore)
+
+#not any splice acceptor or splice donor mutations but some splice region variants
+```
+
+```{r}
+#validation sc screen analysis
+#pycroquet 151 forward read - gRNA + scaffold + extension
+# List all .counts.tsv files in the /results directory
+file_list <- list.files(path = "pycroquet_KRASsc_valid_lib_151bp", pattern = "\\.counts\\.tsv$", full.names = TRUE)
+
+# Function to read and prepare each file
+read_and_prepare <- function(file) {
+  df <- read_tsv(file, skip = 2, show_col_types = FALSE) %>%
+    select(-`#id`, -unique_guide, -gene_pair_id, -sgrna_seqs) %>%
+    rename(id = sgrna_ids)
+  
+  # Get the current count column name (not "id") and generate new name
+  count_col <- setdiff(names(df), "id")
+  sample_name <- tools::file_path_sans_ext(basename(file)) %>% str_remove("\\.counts$")
+  new_colname <- paste0(sample_name, "_valid_pyc_reads")
+  
+  df %>% rename(!!new_colname := all_of(count_col))
+}
+
+# Join all tables by 'id'
+validation_reads <- file_list %>%
+  map(read_and_prepare) %>%
+  reduce(full_join, by = "id")
+
+validation_reads
+```
+
+```{r}
+#describe validataion screen reads from Aviti 151 bp pycroquet with library annotations - left join
+validation_screen <-
+left_join(validation_reads, lib)
+
+validation_screen
+
+#renmae the non_coding pegRNAs
+validation_screen <-
+  validation_screen %>%
+  mutate(mutation_type = ifelse(is.na(mutation_type), "non_coding", mutation_type))
+```
+
+```{r}
+#NB: 89 pegRNAs filtered from the validation library
+join_data_filtered %>%
+  filter(id %in% annotated_ordered_library$id) 
+```
+
+```{r}
+#average reads
+# 1) identify columns like: <prefix>_R1_L1_<suffix> / <prefix>_R2_L1_<suffix>
+meta <- tibble(col = names(validation_screen)) %>%
+  mutate(
+    prefix = str_match(col, "^(.*)_R[12]_L1_")[, 2],
+    suffix = str_match(col, "^.*_R[12]_L1_(.*)$")[, 2]
+  ) %>%
+  filter(!is.na(prefix), !is.na(suffix)) %>%
+  group_by(prefix, suffix) %>%
+  summarise(cols = list(col), .groups = "drop") %>%
+  filter(lengths(cols) == 2)
+
+# 2) add averaged columns (does not delete R1/R2)
+validation_screen <- purrr::reduce(
+  .x = seq_len(nrow(meta)),
+  .init = validation_screen,
+  .f = \(df, i) {
+    cols <- meta$cols[[i]]
+    new_name <- paste(meta$prefix[i], "average", meta$suffix[i], sep = "_")  # drops R? + L1
+
+    df %>%
+      mutate(!!new_name := rowMeans(as.matrix(pick(all_of(cols))), na.rm = TRUE))
+  }
+)
+validation_screen
+```
+
+```{r}
+#RPM
+validation_screen <- validation_screen %>%
+  mutate(across(ends_with("_PE_valid_pyc_reads"),
+                ~ RPM(.),
+                .names = "{.col}_RPM"))
+
+validation_screen
+```
+
+```{r}
+#compute L2FC - plasmid 
+validation_screen <- mutate(validation_screen, L2FC_A427PE_ACBI3_valid_plasmid_R1 = L2FC(A427PE_ACBI_R1_L1_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_ACBI3_valid_plasmid_R2 = L2FC(A427PE_ACBI_R2_L1_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_BI2865_valid_plasmid_R1 = L2FC(A427PE_BI_R1_L1_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_BI2865_valid_plasmid_R2 = L2FC(A427PE_BI_R2_L1_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_T0_valid_plasmid_R1 = L2FC(A427PE_ControlT0_R1_L1_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_T0_valid_plasmid_R2 = L2FC(A427PE_ControlT0_R2_L1_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_Control_valid_plasmid_R1 = L2FC(A427PE_ControlT1_R1_L1_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_Control_valid_plasmid_R2 = L2FC(A427PE_ControlT1_R2_L1_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_MRTX1133_valid_plasmid_R1 = L2FC(A427PE_MRTX_R1_L1_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_MRTX1133_valid_plasmid_R2 = L2FC(A427PE_MRTX_R2_L1_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_RMC6236_valid_plasmid_R1 = L2FC(A427PE_RMC_R1_L1_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_RMC6236_valid_plasmid_R2 = L2FC(A427PE_RMC_R2_L1_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_H647PE_T0_valid_plasmid_R1 = L2FC(H647PE_ControlT0_R1_L1_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_H647PE_T0_valid_plasmid_R2 = L2FC(H647PE_ControlT0_R2_L1_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_H647PE_Control_valid_plasmid_R1 = L2FC(H647PE_ControlT1_R1_L1_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_H647PE_Control_valid_plasmid_R2 = L2FC(H647PE_ControlT1_R2_L1_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_PC9PE_T0_valid_plasmid_R1 = L2FC(PC9PE_ControlT0_R1_L1_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_PC9PE_T0_valid_plasmid_R2 = L2FC(PC9PE_ControlT0_R2_L1_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_PC9PE_Control_valid_plasmid_R1 = L2FC(PC9PE_ControlT1_R1_L1_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_PC9PE_Control_valid_plasmid_R2 = L2FC(PC9PE_ControlT1_R2_L1_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+```
+
+```{r}
+#compute L2FC - T0 
+validation_screen <- mutate(validation_screen, L2FC_A427PE_ACBI3_valid_T0_R1 = L2FC(A427PE_ACBI_R1_L1_PE_valid_pyc_reads_RPM, A427PE_ControlT0_R1_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_ACBI3_valid_T0_R2 = L2FC(A427PE_ACBI_R2_L1_PE_valid_pyc_reads_RPM, A427PE_ControlT0_R2_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_BI2865_valid_T0_R1 = L2FC(A427PE_BI_R1_L1_PE_valid_pyc_reads_RPM, A427PE_ControlT0_R1_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_BI2865_valid_T0_R2 = L2FC(A427PE_BI_R2_L1_PE_valid_pyc_reads_RPM, A427PE_ControlT0_R2_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_Control_valid_T0_R1 = L2FC(A427PE_ControlT1_R1_L1_PE_valid_pyc_reads_RPM, A427PE_ControlT0_R1_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_Control_valid_T0_R2 = L2FC(A427PE_ControlT1_R2_L1_PE_valid_pyc_reads_RPM, A427PE_ControlT0_R2_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_MRTX1133_valid_T0_R1 = L2FC(A427PE_MRTX_R1_L1_PE_valid_pyc_reads_RPM, A427PE_ControlT0_R1_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_MRTX1133_valid_T0_R2 = L2FC(A427PE_MRTX_R2_L1_PE_valid_pyc_reads_RPM, A427PE_ControlT0_R2_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_RMC6236_valid_T0_R1 = L2FC(A427PE_RMC_R1_L1_PE_valid_pyc_reads_RPM, A427PE_ControlT0_R1_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_RMC6236_valid_T0_R2 = L2FC(A427PE_RMC_R2_L1_PE_valid_pyc_reads_RPM, A427PE_ControlT0_R2_L1_PE_valid_pyc_reads_RPM))
+
+validation_screen <- mutate(validation_screen, L2FC_H647PE_Control_valid_T0_R1 = L2FC(H647PE_ControlT1_R1_L1_PE_valid_pyc_reads_RPM, H647PE_ControlT0_R1_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_H647PE_Control_valid_T0_R2 = L2FC(H647PE_ControlT1_R2_L1_PE_valid_pyc_reads_RPM, H647PE_ControlT0_R2_L1_PE_valid_pyc_reads_RPM))
+
+validation_screen <- mutate(validation_screen, L2FC_PC9PE_Control_valid_T0_R1 = L2FC(PC9PE_ControlT1_R1_L1_PE_valid_pyc_reads_RPM, PC9PE_ControlT0_R1_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_PC9PE_Control_valid_T0_R2 = L2FC(PC9PE_ControlT1_R2_L1_PE_valid_pyc_reads_RPM, PC9PE_ControlT0_R2_L1_PE_valid_pyc_reads_RPM))
+```
+
+```{r}
+#average plasmid
+validation_screen <- mutate(validation_screen, L2FC_A427PE_ACBI3_valid_plasmid_average = L2FC(A427PE_ACBI_average_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_BI2865_valid_plasmid_average = L2FC(A427PE_BI_average_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_T0_valid_plasmid_average = L2FC(A427PE_ControlT0_average_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_Control_valid_plasmid_average = L2FC(A427PE_ControlT1_average_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_MRTX1133_valid_plasmid_average = L2FC(A427PE_MRTX_average_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_RMC6236_valid_plasmid_average = L2FC(A427PE_RMC_average_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_H647PE_T0_valid_plasmid_average = L2FC(H647PE_ControlT0_average_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_H647PE_Control_valid_plasmid_average = L2FC(H647PE_ControlT1_average_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_PC9PE_T0_valid_plasmid_average = L2FC(PC9PE_ControlT0_average_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_PC9PE_Control_valid_plasmid_average = L2FC(PC9PE_ControlT1_average_PE_valid_pyc_reads_RPM, Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads_RPM))
+```
+
+```{r}
+#average T0
+validation_screen <- mutate(validation_screen, L2FC_A427PE_ACBI3_valid_T0_average = L2FC(A427PE_ACBI_average_PE_valid_pyc_reads_RPM, A427PE_ControlT0_average_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_BI2865_valid_T0_average = L2FC(A427PE_BI_average_PE_valid_pyc_reads_RPM, A427PE_ControlT0_average_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_Control_valid_T0_average = L2FC(A427PE_ControlT1_average_PE_valid_pyc_reads_RPM, A427PE_ControlT0_average_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_MRTX1133_valid_T0_average = L2FC(A427PE_MRTX_average_PE_valid_pyc_reads_RPM, A427PE_ControlT0_average_PE_valid_pyc_reads_RPM))
+validation_screen <- mutate(validation_screen, L2FC_A427PE_RMC6236_valid_T0_average = L2FC(A427PE_RMC_average_PE_valid_pyc_reads_RPM, A427PE_ControlT0_average_PE_valid_pyc_reads_RPM))
+
+validation_screen <- mutate(validation_screen, L2FC_H647PE_Control_valid_T0_average = L2FC(H647PE_ControlT1_average_PE_valid_pyc_reads_RPM, H647PE_ControlT0_average_PE_valid_pyc_reads_RPM))
+
+validation_screen <- mutate(validation_screen, L2FC_PC9PE_Control_valid_T0_average = L2FC(PC9PE_ControlT1_average_PE_valid_pyc_reads_RPM, PC9PE_ControlT0_average_PE_valid_pyc_reads_RPM))
+```
+
+```{r}
+#z-score
+validation_screen <- 
+  validation_screen %>%
+  mutate(across(starts_with("L2FC"),
+                ~ zscore(.),
+                .names = "{.col}_zscore"))
+validation_screen
+```
+
+```{r}
+#add annotation data to the datatable of validation screen
+annotations_validation_lib <-
+annotated_ordered_library %>%
+  select(id, lib_class, Plasmid_8132stdy_pyc_reads, Plasmid_8132stdy_dual_PE_pyc_reads, A427_PE_FLARE_Lib_sorted_end_average_corrected_editing, L2FC_A427_PE_FLARE_T0_Par_average_zscore, L2FC_A427_PE_ACBI3_T0_Par_average_zscore, L2FC_A427_PE_MRTX_T0_Par_average_zscore, L2FC_A427_PE_RMC_T0_Par_average_zscore, L2FC_A427_PE_BI_T0_Par_average_zscore)
+
+validation_screen <-
+left_join(validation_screen, annotations_validation_lib) 
+
+validation_screen
+```
+
+```{r}
+#plot z-score versus readcount - plasmid
+plot1 <- ggplot(validation_screen, aes(x=L2FC_A427PE_RMC6236_valid_plasmid_average_zscore, y = Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads, colour = mutation_type)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(400),linetype="dotted") +
+  xlab("L2FC_A427PE_RMC6236_plasmid_average_zscore") +
+  ylab("Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads") 
+plot1
+
+plot2 <- ggplot(validation_screen, aes(x=L2FC_A427PE_MRTX1133_valid_plasmid_average_zscore, y = Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads, colour = mutation_type)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(400),linetype="dotted") +
+  xlab("L2FC_A427PE_MRTX1133_plasmid_average_zscore") +
+  ylab("Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads") 
+plot2
+
+plot3 <- ggplot(validation_screen, aes(x=L2FC_A427PE_BI2865_valid_plasmid_average_zscore, y = Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads, colour = mutation_type)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(400),linetype="dotted") +
+  xlab("L2FC_A427PE_BI2865_plasmid_average_zscore") +
+  ylab("Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads") 
+plot3
+
+plot4 <- ggplot(validation_screen, aes(x=L2FC_A427PE_ACBI3_valid_plasmid_average_zscore, y = Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads, colour = mutation_type)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(400),linetype="dotted") +
+  xlab("L2FC_A427PE_ACBI3_plasmid_average_zscore") +
+  ylab("Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads") 
+plot4
+
+plot5 <- ggplot(validation_screen, aes(x=L2FC_A427PE_Control_valid_plasmid_average_zscore, y = Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads, colour = mutation_type)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(400),linetype="dotted") +
+  xlab("L2FC_A427PE_Control_plasmid_average_zscore") +
+  ylab("Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads") 
+plot5
+
+plot6 <- ggplot(validation_screen, aes(x=L2FC_PC9PE_Control_valid_plasmid_average_zscore, y = Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads, colour = mutation_type)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(400),linetype="dotted") +
+  xlab("L2FC_PC9PE_Control_plasmid_average_zscore") +
+  ylab("Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads") 
+plot6
+
+plot7 <- ggplot(validation_screen, aes(x=L2FC_H647PE_Control_valid_plasmid_average_zscore, y = Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads, colour = mutation_type)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(400),linetype="dotted") +
+  xlab("L2FC_H647PE_Control_plasmid_average_zscore") +
+  ylab("Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads") 
+plot7
+```
+
+```{r}
+#plot z-score versus readcount - T0
+plot1 <- ggplot(validation_screen, aes(x=L2FC_A427PE_RMC6236_valid_T0_average_zscore, y = Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads, colour = mutation_type)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(400),linetype="dotted") +
+  xlab("L2FC_A427PE_RMC6236_T0_average_zscore") +
+  ylab("Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads") 
+plot1
+
+plot2 <- ggplot(validation_screen, aes(x=L2FC_A427PE_MRTX1133_valid_T0_average_zscore, y = Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads, colour = mutation_type)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(400),linetype="dotted") +
+  xlab("L2FC_A427PE_MRTX1133_T0_average_zscore") +
+  ylab("Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads") 
+plot2
+
+plot3 <- ggplot(validation_screen, aes(x=L2FC_A427PE_BI2865_valid_T0_average_zscore, y = Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads, colour = mutation_type)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(400),linetype="dotted") +
+  xlab("L2FC_A427PE_BI2865_T0_average_zscore") +
+  ylab("Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads") 
+plot3
+
+plot4 <- ggplot(validation_screen, aes(x=L2FC_A427PE_ACBI3_valid_T0_average_zscore, y = Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads, colour = mutation_type)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(400),linetype="dotted") +
+  xlab("L2FC_A427PE_ACBI3_T0_average_zscore") +
+  ylab("Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads") 
+plot4
+
+plot5 <- ggplot(validation_screen, aes(x=L2FC_A427PE_Control_valid_T0_average_zscore, y = Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads, colour = mutation_type)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(400),linetype="dotted") +
+  xlab("L2FC_A427PE_Control_T0_average_zscore") +
+  ylab("Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads") 
+plot5
+
+plot6 <- ggplot(validation_screen, aes(x=L2FC_PC9PE_Control_valid_T0_average_zscore, y = Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads, colour = mutation_type)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(400),linetype="dotted") +
+  xlab("L2FC_PC9PE_Control_T0_average_zscore") +
+  ylab("Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads") 
+plot6
+
+plot7 <- ggplot(validation_screen, aes(x=L2FC_H647PE_Control_valid_T0_average_zscore, y = Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads, colour = mutation_type)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(400),linetype="dotted") +
+  xlab("L2FC_H647PE_Control_T0_average_zscore") +
+  ylab("Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads") 
+plot7
+```
+
+```{r}
+#add a filter of 400 reads in plasmid control to avoid 0 counts 
+validation_screen %>%
+  filter(Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads <400)
+
+validation_screen_filtered <-
+  validation_screen %>%
+  filter(Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads >400)
+
+validation_screen_filtered
+#gets rid of 24 pegRNAs
+```
+
+```{r}
+#plot T0 versus plasmid z-score for A427 validation screen
+plot1 <- ggplot(validation_screen_filtered, aes(x=L2FC_A427PE_RMC6236_valid_T0_average_zscore, y = L2FC_A427PE_RMC6236_valid_plasmid_average_zscore, colour = Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+    geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_RMC6236_valid_T0_average_zscore") +
+  ylab("L2FC_A427PE_RMC6236_valid_plasmid_average_zscore") +
+    geom_text_repel(aes(label=ifelse(L2FC_A427PE_RMC6236_valid_plasmid_R1_zscore >1.5 | L2FC_A427PE_RMC6236_valid_plasmid_R2_zscore >1.5 | L2FC_A427PE_RMC6236_valid_T0_R1_zscore>1.5 | L2FC_A427PE_RMC6236_valid_T0_R2_zscore >1.5, paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot1
+
+#T74 only - RMC
+plot1 <- ggplot(validation_screen_filtered, aes(x=L2FC_A427PE_RMC6236_valid_T0_average_zscore, y = L2FC_A427PE_RMC6236_valid_plasmid_average_zscore, colour = Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+    geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_RMC6236_valid_T0_average_zscore") +
+  ylab("L2FC_A427PE_RMC6236_valid_plasmid_average_zscore") +
+    geom_text_repel(aes(label=ifelse(str_detect(sequence_name, "T74"), paste(sequence_name, id), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot1
+
+#T74 only - BI
+plot1 <- ggplot(validation_screen_filtered, aes(x=L2FC_A427PE_BI2865_valid_T0_average_zscore, y = L2FC_A427PE_BI2865_valid_plasmid_average_zscore, colour = Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+    geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_BI2865_valid_T0_average_zscore") +
+  ylab("L2FC_A427PE_BI2865_valid_plasmid_average_zscore") +
+    geom_text_repel(aes(label=ifelse(str_detect(sequence_name, "T74"), paste(sequence_name, id), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot1
+
+#T74 only - ACBI3
+plot1 <- ggplot(validation_screen_filtered, aes(x=L2FC_A427PE_ACBI3_valid_T0_average_zscore, y = L2FC_A427PE_ACBI3_valid_plasmid_average_zscore, colour = Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+    geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_ACBI3_valid_T0_average_zscore") +
+  ylab("L2FC_A427PE_ACBI3_valid_plasmid_average_zscore") +
+    geom_text_repel(aes(label=ifelse(str_detect(sequence_name, "T74"), paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot1
+
+#T74 only - MRTX1133
+plot1 <- ggplot(validation_screen_filtered, aes(x=L2FC_A427PE_MRTX1133_valid_T0_average_zscore, y = L2FC_A427PE_MRTX1133_valid_plasmid_average_zscore, colour = Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+    geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_MRTX1133_valid_T0_average_zscore") +
+  ylab("L2FC_A427PE_MRTX1133_valid_plasmid_average_zscore") +
+    geom_text_repel(aes(label=ifelse(str_detect(sequence_name, "T74"), paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot1
+
+#T74 only - control
+plot1 <- ggplot(validation_screen_filtered, aes(x=L2FC_A427PE_Control_valid_T0_average_zscore, y = L2FC_A427PE_Control_valid_plasmid_average_zscore, colour = Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+    geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_Control_valid_T0_average_zscore") +
+  ylab("L2FC_A427PE_Control_valid_plasmid_average_zscore") +
+    geom_text_repel(aes(label=ifelse(str_detect(sequence_name, "T74"), paste(sequence_name, id), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot1
+```
+
+```{r}
+#replicate correlation - validation screen
+plot1 <- ggplot(validation_screen_filtered, aes(x=L2FC_PC9PE_Control_valid_plasmid_R1_zscore, y = L2FC_PC9PE_Control_valid_plasmid_R2_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_PC9PE_Control_valid_plasmid_R1_zscore") +
+  ylab("L2FC_PC9PE_Control_valid_plasmid_R2_zscore") +
+  geom_text_repel(aes(label=ifelse(L2FC_PC9PE_Control_valid_plasmid_R1_zscore >2 & L2FC_PC9PE_Control_valid_plasmid_R1_zscore >2, paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot1
+
+plot2 <- ggplot(validation_screen_filtered, aes(x=L2FC_H647PE_Control_valid_plasmid_R1_zscore, y = L2FC_H647PE_Control_valid_plasmid_R2_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_H647PE_Control_valid_plasmid_R1_zscore") +
+  ylab("L2FC_H647PE_valid_Control_plasmid_R2_zscore") +
+  geom_text_repel(aes(label=ifelse(L2FC_H647PE_Control_valid_plasmid_R1_zscore >2 & L2FC_H647PE_Control_valid_plasmid_R2_zscore >2, paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot2
+
+plot3 <- ggplot(validation_screen_filtered, aes(x=L2FC_A427PE_Control_valid_plasmid_R1_zscore, y = L2FC_A427PE_Control_valid_plasmid_R2_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_Control_valid_plasmid_R1_zscore") +
+  ylab("L2FC_A427PE_Control_valid_plasmid_R2_zscore") + 
+  geom_text_repel(aes(label=ifelse(L2FC_A427PE_Control_valid_plasmid_R1_zscore >2 & L2FC_A427PE_Control_valid_plasmid_R2_zscore >2, paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot3
+ggsave("valid_reps_control.eps", width = 4, height = 4, path ="./figures_export")
+
+plot4 <- ggplot(validation_screen_filtered, aes(x=L2FC_A427PE_RMC6236_valid_plasmid_R1_zscore, y = L2FC_A427PE_RMC6236_valid_plasmid_R2_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_RMC6236_plasmid_R1_zscore") +
+  ylab("L2FC_A427PE_RMC6236_plasmid_R2_zscore") + 
+  geom_text_repel(aes(label=ifelse(L2FC_A427PE_RMC6236_valid_plasmid_R1_zscore >2 & L2FC_A427PE_RMC6236_valid_plasmid_R2_zscore >2, paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot4
+ggsave("valid_reps_RMC.eps", width = 4, height = 4, path ="./figures_export")
+
+plot5 <- ggplot(validation_screen_filtered, aes(x=L2FC_A427PE_MRTX1133_valid_plasmid_R1_zscore, y = L2FC_A427PE_MRTX1133_valid_plasmid_R2_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_MRTX1133_valid_plasmid_R1_zscore") +
+  ylab("L2FC_A427PE_MRTX1133_valid_plasmid_R2_zscore") +
+  geom_text_repel(aes(label=ifelse(L2FC_A427PE_MRTX1133_valid_plasmid_R1_zscore >2 & L2FC_A427PE_MRTX1133_valid_plasmid_R2_zscore >2, paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot5
+ggsave("valid_reps_MRTX.eps", width = 4.15, height = 4.15, path ="./figures_export")
+
+plot6 <- ggplot(validation_screen_filtered, aes(x=L2FC_A427PE_ACBI3_valid_plasmid_R1_zscore, y = L2FC_A427PE_ACBI3_valid_plasmid_R2_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_ACBI3_valid_plasmid_R1_zscore") +
+  ylab("L2FC_A427PE_ACBI3_valid_plasmid_R2_zscore") +
+  geom_text_repel(aes(label=ifelse(L2FC_A427PE_ACBI3_valid_plasmid_R1_zscore > 3 & L2FC_A427PE_ACBI3_valid_plasmid_R2_zscore >2, paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot6
+ggsave("valid_reps_ACBI3.eps", width = 4, height = 4, path ="./figures_export")
+
+plot7 <- ggplot(validation_screen_filtered, aes(x=L2FC_A427PE_BI2865_valid_plasmid_R1_zscore, y = L2FC_A427PE_BI2865_valid_plasmid_R2_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_BI2865_valid_plasmid_R1_zscore") +
+  ylab("L2FC_A427PE_BI2865_valid_plasmid_R2_zscore") +
+  geom_text_repel(aes(label=ifelse(L2FC_A427PE_BI2865_valid_plasmid_R1_zscore >2 & L2FC_A427PE_BI2865_valid_plasmid_R2_zscore >2, paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot7
+ggsave("valid_reps_BI.eps", width = 4, height = 4, path ="./figures_export")
+```
+
+```{r}
+#validation screen versus original PE screen
+plot1 <- ggplot(validation_screen_filtered, aes(x=L2FC_A427PE_RMC6236_valid_plasmid_average_zscore, y = L2FC_A427_PE_RMC_T0_Par_average_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_RMC6236_valid_plasmid_average_zscore") +
+  ylab("L2FC_A427_PE_RMC_T0_Par_average_zscore") 
+plot1
+
+plot2 <- ggplot(validation_screen_filtered, aes(x=L2FC_A427PE_ACBI3_valid_plasmid_average_zscore, y = L2FC_A427_PE_ACBI3_T0_Par_average_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_ACBI3_valid_plasmid_average_zscore") +
+  ylab("L2FC_A427_PE_ACBI_T0_Par_average_zscore") 
+plot2
+
+plot3 <- ggplot(validation_screen_filtered, aes(x=L2FC_A427PE_MRTX1133_valid_plasmid_average_zscore, y = L2FC_A427_PE_MRTX_T0_Par_average_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_MRTX1133_valid_plasmid_average_zscore") +
+  ylab("L2FC_A427_PE_MRTX_T0_Par_average_zscore") 
+plot3
+
+plot4 <- ggplot(validation_screen_filtered, aes(x=L2FC_A427PE_BI2865_valid_plasmid_average_zscore, y = L2FC_A427_PE_BI_T0_Par_average_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_BI2865_valid_plasmid_average_zscore") +
+  ylab("L2FC_A427_PE_BI_T0_Par_average_zscore") 
+plot4
+
+plot5 <- ggplot(validation_screen_filtered, aes(x=L2FC_A427PE_Control_valid_plasmid_average_zscore, y = L2FC_A427_PE_FLARE_T0_Par_average_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_Control_valid_plasmid_average_zscore") +
+  ylab("L2FC_A427_PE_FLARE_T0_Par_average_zscore") 
+plot5
+```
+
+```{r}
+#without the low count pegRNAs from the original screen
+validation_screen_filtered_primary <-
+  validation_screen_filtered %>%
+  filter(Plasmid_8132stdy_pyc_reads >400)
+
+validation_screen_filtered_primary
+```
+
+```{r}
+#validation screen versus original PE screen
+plot1 <- ggplot(validation_screen_filtered_primary, aes(x=L2FC_A427PE_RMC6236_valid_plasmid_average_zscore, y = L2FC_A427_PE_RMC_T0_Par_average_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_RMC6236_valid_plasmid_average_zscore") +
+  ylab("L2FC_A427_PE_RMC_T0_Par_average_zscore") +
+  geom_text_repel(aes(label=ifelse(L2FC_A427PE_RMC6236_valid_plasmid_average_zscore >2 & L2FC_A427_PE_RMC_T0_Par_average_zscore >2, paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot1
+
+plot2 <- ggplot(validation_screen_filtered_primary, aes(x=L2FC_A427PE_ACBI3_valid_plasmid_average_zscore, y = L2FC_A427_PE_ACBI3_T0_Par_average_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_ACBI3_valid_plasmid_average_zscore") +
+  ylab("L2FC_A427_PE_ACBI_T0_Par_average_zscore") +
+    geom_text_repel(aes(label=ifelse(L2FC_A427PE_ACBI3_valid_plasmid_average_zscore >2 & L2FC_A427_PE_ACBI3_T0_Par_average_zscore >2, paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot2
+
+plot3 <- ggplot(validation_screen_filtered_primary, aes(x=L2FC_A427PE_MRTX1133_valid_plasmid_average_zscore, y = L2FC_A427_PE_MRTX_T0_Par_average_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_MRTX1133_valid_plasmid_average_zscore") +
+  ylab("L2FC_A427_PE_MRTX_T0_Par_average_zscore") +
+    geom_text_repel(aes(label=ifelse(L2FC_A427PE_MRTX1133_valid_plasmid_average_zscore >2 & L2FC_A427_PE_MRTX_T0_Par_average_zscore >2, paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot3
+
+plot4 <- ggplot(validation_screen_filtered_primary, aes(x=L2FC_A427PE_BI2865_valid_plasmid_average_zscore, y = L2FC_A427_PE_BI_T0_Par_average_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_BI2865_valid_plasmid_average_zscore") +
+  ylab("L2FC_A427_PE_BI_T0_Par_average_zscore") +
+    geom_text_repel(aes(label=ifelse(L2FC_A427PE_BI2865_valid_plasmid_average_zscore >2 & L2FC_A427_PE_BI_T0_Par_average_zscore >2, paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot4
+
+plot5 <- ggplot(validation_screen_filtered_primary, aes(x=L2FC_A427PE_Control_valid_plasmid_average_zscore, y = L2FC_A427_PE_FLARE_T0_Par_average_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_Control_valid_plasmid_average_zscore") +
+  ylab("L2FC_A427_PE_FLARE_T0_Par_average_zscore") +
+  geom_text_repel(aes(label=ifelse(L2FC_A427PE_Control_valid_plasmid_average_zscore >1 & L2FC_A427_PE_FLARE_T0_Par_average_zscore >1, paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot5
+```
+
+```{r}
+#pearson correlation - plasmid RMC
+r1 <- cor(validation_screen_filtered_primary$L2FC_A427PE_RMC6236_valid_plasmid_average_zscore, validation_screen_filtered_primary$L2FC_A427_PE_RMC_T0_Par_average_zscore, method = "pearson")
+cor.test(validation_screen_filtered_primary$L2FC_A427PE_RMC6236_valid_plasmid_average_zscore, validation_screen_filtered_primary$L2FC_A427_PE_RMC_T0_Par_average_zscore, method = "pearson", use = "complete.obs")
+r1
+
+#figure of RMC correlation in validation versus orginal screen
+plot1 <- ggplot(validation_screen_filtered_primary, aes(x=L2FC_A427PE_RMC6236_valid_plasmid_average_zscore, y = L2FC_A427_PE_RMC_T0_Par_average_zscore, colour = mutation_type)) +
+geom_point(size = 0.4, position = pos, show.legend = FALSE) +
+theme_classic() +
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("validation screen\n A427 RMC-6236 (z-score)") +
+  ylab("primary screen\n A427 RMC-6236 (z-score)") +
+  geom_text_repel(aes(label=ifelse(L2FC_A427PE_RMC6236_valid_plasmid_average_zscore >1.1 & L2FC_A427_PE_RMC_T0_Par_average_zscore >1.1 | sequence_name %in% c("KRAS_T74I", "KRAS_T74Smut2"), paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2, show.legend = FALSE) +
+  scale_color_manual(values =c("black","purple", "grey75", "red3", "royalblue"))+
+        geom_abline(slope = 1, intercept = 0, linetype = "dotted",linewidth = 0.1) +
+    annotate("text", y = -1.2, x = 6, label = paste("r =", round(r1, 2)), parse = FALSE, size = 3.5)
+plot1
+ggsave("valid_primary_scatter.eps", width = 3.5, height = 3.5, path ="./figures_export")
+```
+
+```{r}
+#pearson correlation - T0 RMC
+r1 <- cor(validation_screen_filtered_primary$L2FC_A427PE_RMC6236_valid_T0_average_zscore, validation_screen_filtered_primary$L2FC_A427_PE_RMC_T0_Par_average_zscore, method = "pearson")
+cor.test(validation_screen_filtered_primary$L2FC_A427PE_RMC6236_valid_T0_average_zscore, validation_screen_filtered_primary$L2FC_A427_PE_RMC_T0_Par_average_zscore, method = "pearson", use = "complete.obs")
+r1
+
+#figure of RMC correlation in validation versus orginal screen
+plot1 <- ggplot(validation_screen_filtered_primary, aes(x=L2FC_A427PE_RMC6236_valid_T0_average_zscore, y = L2FC_A427_PE_RMC_T0_Par_average_zscore, colour = mutation_type)) +
+geom_point(size = 0.4, position = pos, show.legend = FALSE) +
+theme_classic() +
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("validation screen\n A427 RMC-6236 (z-score)") +
+  ylab("primary screen\n A427 RMC-6236 (z-score)") +
+  geom_text_repel(aes(label=ifelse(L2FC_A427PE_RMC6236_valid_T0_average_zscore >1 & L2FC_A427_PE_RMC_T0_Par_average_zscore >1 | sequence_name %in% c("KRAS_Q70P", "KRAS_R68M", "KRAS_T74I"), paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2, show.legend = FALSE) +
+  scale_color_manual(values =c("black","purple", "grey75", "red3", "royalblue"))+
+        geom_abline(slope = 1, intercept = 0, linetype = "dotted",linewidth = 0.1) +
+    annotate("text", y = -1.2, x = 6, label = paste("r =", round(r1, 2)), parse = FALSE, size = 3.5)
+plot1
+```
+
+```{r}
+#figure of BI correlation in validation versus original screen
+plot1 <- ggplot(validation_screen_filtered_primary, aes(x=L2FC_A427PE_BI2865_valid_plasmid_average_zscore, y = L2FC_A427_PE_BI_T0_Par_average_zscore, colour = mutation_type)) +
+geom_point(size = 0.4, position = pos, show.legend = FALSE) +
+theme_classic() +
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("validation screen\n A427 BI-2865 (z-score)") +
+  ylab("primary screen\n A427 BI-2865 (z-score)") +
+  geom_text_repel(aes(label=ifelse(L2FC_A427PE_BI2865_valid_plasmid_average_zscore >1.5 & L2FC_A427_PE_BI_T0_Par_average_zscore >1.5, paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2, show.legend = FALSE) +
+  scale_color_manual(values =c("black","purple", "grey75", "red3", "royalblue"))+
+        geom_abline(slope = 1, intercept = 0, linetype = "dotted",linewidth = 0.1)
+plot1
+
+#figure of MRTX correlation in validation versus original screen
+plot2 <- ggplot(validation_screen_filtered_primary, aes(x=L2FC_A427PE_MRTX1133_valid_plasmid_average_zscore, y = L2FC_A427_PE_MRTX_T0_Par_average_zscore, colour = mutation_type)) +
+geom_point(size = 0.4, position = pos, show.legend = FALSE) +
+theme_classic() +
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("validation screen\n A427 MRTX1133 (z-score)") +
+  ylab("primary screen\n A427 MRTX1133 (z-score)") +
+  geom_text_repel(aes(label=ifelse(L2FC_A427PE_MRTX1133_valid_plasmid_average_zscore   >1.5 & L2FC_A427_PE_MRTX_T0_Par_average_zscore >1.5, paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2, show.legend = FALSE) +
+  scale_color_manual(values =c("black","purple", "grey75", "red3", "royalblue"))+
+        geom_abline(slope = 1, intercept = 0, linetype = "dotted",linewidth = 0.1)
+plot2
+
+#figure of control correlation in validation versus original screen
+plot3 <- ggplot(validation_screen_filtered_primary, aes(x=L2FC_A427PE_Control_valid_plasmid_average_zscore, y = L2FC_A427_PE_FLARE_T0_Par_average_zscore, colour = mutation_type)) +
+geom_point(size = 0.4, position = pos, show.legend = FALSE) +
+theme_classic() +
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("validation screen\n A427 Control (z-score)") +
+  ylab("primary screen\n A427 Control (z-score)") +
+  geom_text_repel(aes(label=ifelse(L2FC_A427PE_Control_valid_plasmid_average_zscore >1 & L2FC_A427_PE_FLARE_T0_Par_average_zscore >1, paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2, show.legend = FALSE) +
+  scale_color_manual(values =c("black","purple", "grey75", "red3", "royalblue"))+
+        geom_abline(slope = 1, intercept = 0, linetype = "dotted",linewidth = 0.1)
+plot3
+
+#figure of control correlation in validation versus original screen
+plot4 <- ggplot(validation_screen_filtered_primary, aes(x=L2FC_A427PE_ACBI3_valid_plasmid_average_zscore, y = L2FC_A427_PE_ACBI3_T0_Par_average_zscore, colour = mutation_type)) +
+geom_point(size = 0.4, position = pos, show.legend = FALSE) +
+theme_classic() +
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("validation screen\n A427 ACBI3 (z-score)") +
+  ylab("primary screen\n A427 ACBI3 (z-score)") +
+  geom_text_repel(aes(label=ifelse(L2FC_A427PE_ACBI3_valid_plasmid_average_zscore >1 & L2FC_A427_PE_ACBI3_T0_Par_average_zscore >1, paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2, show.legend = FALSE) +
+  scale_color_manual(values =c("black","purple", "grey75", "red3", "royalblue"))+
+        geom_abline(slope = 1, intercept = 0, linetype = "dotted",linewidth = 0.1)
+plot4
+```
+
+```{r}
+#check performance of non_coding pegRNAs
+validation_screen_filtered_primary %>%
+  filter(mutation_type == "non_coding") %>%
+  arrange(desc(L2FC_A427PE_BI2865_valid_plasmid_average_zscore)) %>%
+  select(id, L2FC_A427PE_Control_valid_plasmid_average_zscore, L2FC_A427PE_RMC6236_valid_plasmid_average_zscore, L2FC_A427PE_BI2865_valid_plasmid_average_zscore, L2FC_A427PE_MRTX1133_valid_plasmid_average_zscore, sequence_name)
+```
+
+```{r}
+# enumerate the validation rate for resistance hits
+#RMC-6236
+#primary
+validation_screen_filtered_primary %>%
+  filter(L2FC_A427_PE_RMC_T0_Par_average_zscore >3)%>%
+  select(sequence_name, id, L2FC_A427_PE_RMC_T0_Par_average_zscore, L2FC_A427PE_RMC6236_valid_plasmid_average_zscore)
+#primary
+validation_screen_filtered_primary %>%
+  filter(L2FC_A427PE_RMC6236_valid_plasmid_average_zscore >3)%>%
+  select(sequence_name, id, L2FC_A427_PE_RMC_T0_Par_average_zscore, L2FC_A427PE_RMC6236_valid_plasmid_average_zscore)
+#both
+validation_screen_filtered_primary %>%
+  filter(L2FC_A427_PE_RMC_T0_Par_average_zscore >3 & L2FC_A427PE_RMC6236_valid_plasmid_average_zscore >3)%>%
+  select(sequence_name, id, L2FC_A427_PE_RMC_T0_Par_average_zscore, L2FC_A427PE_RMC6236_valid_plasmid_average_zscore)
+
+#MRTX1133
+#primary
+validation_screen_filtered_primary %>%
+  filter(L2FC_A427_PE_MRTX_T0_Par_average_zscore >3) %>%
+  select(sequence_name, id, L2FC_A427_PE_RMC_T0_Par_average_zscore, L2FC_A427PE_RMC6236_valid_plasmid_average_zscore)
+#validation
+validation_screen_filtered_primary %>%
+  filter(L2FC_A427PE_MRTX1133_valid_plasmid_average_zscore >3) %>%
+  select(sequence_name, id, L2FC_A427_PE_MRTX_T0_Par_average_zscore, L2FC_A427PE_MRTX1133_valid_plasmid_average_zscore)
+#both
+validation_screen_filtered_primary %>%
+  filter(L2FC_A427_PE_MRTX_T0_Par_average_zscore >3 & L2FC_A427PE_MRTX1133_valid_plasmid_average_zscore >3) %>%
+  select(sequence_name, id, L2FC_A427_PE_MRTX_T0_Par_average_zscore, L2FC_A427PE_MRTX1133_valid_plasmid_average_zscore)
+
+#ACBI3
+#primary
+validation_screen_filtered_primary %>%
+  filter(L2FC_A427_PE_ACBI3_T0_Par_average_zscore >3) %>%
+  select(sequence_name, id, L2FC_A427_PE_ACBI3_T0_Par_average_zscore, L2FC_A427PE_ACBI3_valid_plasmid_average_zscore)
+#validation
+validation_screen_filtered_primary %>%
+  filter(L2FC_A427PE_ACBI3_valid_plasmid_average_zscore >3) %>%
+  select(sequence_name, id, L2FC_A427_PE_ACBI3_T0_Par_average_zscore, L2FC_A427PE_ACBI3_valid_plasmid_average_zscore)
+#both
+validation_screen_filtered_primary %>%
+  filter(L2FC_A427_PE_ACBI3_T0_Par_average_zscore >3 & L2FC_A427PE_ACBI3_valid_plasmid_average_zscore >3) %>%
+  select(sequence_name, id, L2FC_A427_PE_ACBI3_T0_Par_average_zscore, L2FC_A427PE_ACBI3_valid_plasmid_average_zscore)
+
+#BI2865
+#primary
+validation_screen_filtered_primary %>%
+  filter(L2FC_A427_PE_BI_T0_Par_average_zscore >3) %>%
+  select(sequence_name, id, L2FC_A427_PE_BI_T0_Par_average_zscore, L2FC_A427PE_BI2865_valid_plasmid_average_zscore)
+#validation
+validation_screen_filtered_primary %>%
+  filter(L2FC_A427PE_BI2865_valid_plasmid_average_zscore >3) %>%
+  select(sequence_name, id, L2FC_A427_PE_BI_T0_Par_average_zscore, L2FC_A427PE_BI2865_valid_plasmid_average_zscore)
+#both
+validation_screen_filtered_primary %>%
+  filter(L2FC_A427_PE_BI_T0_Par_average_zscore >3 & L2FC_A427PE_BI2865_valid_plasmid_average_zscore >3) %>%
+  select(sequence_name, id, L2FC_A427_PE_BI_T0_Par_average_zscore, L2FC_A427PE_BI2865_valid_plasmid_average_zscore)
+```
+
+```{r}
+#compare cell models
+plot1 <- ggplot(validation_screen_filtered_primary, aes(x=L2FC_A427PE_Control_valid_plasmid_average_zscore, y = L2FC_PC9PE_Control_valid_plasmid_average_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_Control_plasmid_average_zscore") +
+  ylab("L2FC_PC9PE_Control_plasmid_average_zscore") +
+  geom_text_repel(aes(label=ifelse(L2FC_A427PE_Control_valid_plasmid_average_zscore >1.1 & L2FC_PC9PE_Control_valid_plasmid_average_zscore >1.1, paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot1
+
+plot2 <- ggplot(validation_screen_filtered_primary, aes(x=L2FC_A427PE_Control_valid_plasmid_average_zscore, y = L2FC_H647PE_Control_valid_plasmid_average_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427PE_Control_plasmid_average_zscore") +
+  ylab("L2FC_H647PE_Control_plasmid_average_zscore") +
+  geom_text_repel(aes(label=ifelse(L2FC_A427PE_Control_valid_plasmid_average_zscore >1.5 & L2FC_H647PE_Control_valid_plasmid_average_zscore >1.5, paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot2
+
+plot3 <- ggplot(validation_screen_filtered_primary, aes(x=L2FC_H647PE_Control_valid_plasmid_average_zscore, y = L2FC_PC9PE_Control_valid_plasmid_average_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_H647PE_Control_plasmid_average_zscore") +
+  ylab("L2FC_PC9PE_Control_plasmid_average_zscore") +
+  geom_text_repel(aes(label=ifelse(L2FC_H647PE_Control_valid_plasmid_average_zscore >1.5 & L2FC_PC9PE_Control_valid_plasmid_average_zscore >1.5, paste(sequence_name), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot3
+```
+
+```{r}
+#make an output files with editing an zscores for analysis for the single cell RNA seq data
+sc_zscores <-
+validation_screen %>%
+select(
+    -contains("H647"),
+    -contains("predict_rank"),
+    -contains("length"),
+    -contains("extension1_in_sensor"),
+    -contains("extension2_in_sensor"),
+    -contains("_RPM"), 
+    -contains("pridict_rank"),
+    -contains("Twist_oligo"),
+    -contains("R1_L1_PE_valid_pyc_reads"),
+    -contains("R2_L1_PE_valid_pyc_reads"),
+    -contains("_average_PE_valid_pyc_reads"),
+    -contains("genomic_context"), 
+    -contains("sensor"),
+    -contains("rc_sensor"),
+    -contains("sensor_orientation"),
+    -contains("extension_before_variant"),
+    -contains("extension_after_variant"),
+    -contains("rc_gRNA")
+    )
+
+sc_zscores <-
+sc_zscores %>%
+  mutate(LOW_COUNTS_validation_screen = ifelse((Plasmid_scKRAS_PE_pool_L1_PE_valid_pyc_reads <400), TRUE, FALSE))
+
+sc_zscores <-
+sc_zscores %>%
+  mutate(LOW_COUNTS_primary_screen = ifelse((Plasmid_8132stdy_pyc_reads <400), TRUE, FALSE))
+
+sc_zscores
+```
+
+```{r}
+#redefine the lib_class field based on the validation screen and RMC condition
+sc_zscores <-
+  sc_zscores %>%
+  mutate(lib_class = NA)
+
+sc_zscores <-
+sc_zscores %>%
+  mutate(lib_class = ifelse(A427_PE_FLARE_Lib_sorted_end_average_corrected_editing >= 60 & LOW_COUNTS_validation_screen == FALSE &  LOW_COUNTS_primary_screen == FALSE, "editing" , lib_class))
+
+sc_zscores <-
+sc_zscores %>%
+  mutate(lib_class = ifelse(L2FC_A427PE_RMC6236_valid_plasmid_average_zscore >1 & L2FC_A427_PE_RMC_T0_Par_average_zscore >1 & LOW_COUNTS_validation_screen == FALSE &  LOW_COUNTS_primary_screen == FALSE, "resistance",
+                               ifelse(L2FC_A427PE_Control_valid_plasmid_average_zscore < -1 | L2FC_A427PE_RMC6236_valid_plasmid_average_zscore < -1, "deleterious", lib_class))) 
+
+sc_zscores <-
+sc_zscores %>%
+  mutate(lib_class = ifelse(L2FC_A427PE_Control_valid_plasmid_average_zscore > 1 & L2FC_A427_PE_FLARE_T0_Par_average_zscore > 1 & LOW_COUNTS_validation_screen == FALSE &  LOW_COUNTS_primary_screen == FALSE, "driver",
+                               ifelse(mutation_type == "synonymous", "synonymous",
+                                      ifelse(mutation_type == "non_coding", "non_coding",
+                                                        ifelse(mutation_type == "non_targeting", "non_targeting",
+                                   lib_class)))))
+
+sc_zscores %>%
+  write.csv("scRNAseq_zscores.csv", row.names=FALSE)
+```
+
+```{r}
+#make a dot plot graph of resistance mutations
+df_long_zscore <- 
+  join_data_filtered_editing %>%
+  select(id, gene, amino_acid_position, sequence_name, mutation_type, mutation, L2FC_A427_PE_FLARE_T0_Par_average_zscore, L2FC_A427_PE_BI_T0_Par_average_zscore, L2FC_A427_PE_MRTX_T0_Par_average_zscore, L2FC_A427_PE_RMC_T0_Par_average_zscore, L2FC_A427_PE_ACBI3_T0_Par_average_zscore) %>%
+  pivot_longer(!c(id, sequence_name, gene, mutation, mutation_type, amino_acid_position), names_to = "drug", values_to = "z_score") %>%
+  distinct()
+
+df_long_editing <- 
+  join_data_filtered_editing %>%
+  select(id, gene, amino_acid_position, sequence_name, mutation, mutation_type, A427_PE_FLARE_Lib_sorted_end_average_corrected_editing, A427_PE_Lib_RMC_end_average_corrected_editing, A427_PE_Lib_BI_2863_end_average_corrected_editing, A427_PE_Lib_MRTX_end_average_corrected_editing, A427_PE_Lib_ACBI3_end_average_corrected_editing) %>%
+  pivot_longer(!c(id, sequence_name, gene, mutation, mutation_type, amino_acid_position), names_to = "drug", values_to = "editing") %>%
+  distinct()
+
+df_long_zscore <-
+  df_long_zscore %>%
+  mutate(drug = ifelse(str_detect(drug, "_FLARE_"), "control", drug)) %>%
+    mutate(drug = ifelse(str_detect(drug, "_BI_"), "BI-2865", drug)) %>%
+  mutate(drug = ifelse(str_detect(drug, "_MRTX_"), "MRTX1133", drug)) %>%
+  mutate(drug = ifelse(str_detect(drug, "_RMC_"), "RMC-6236", drug)) %>%
+  mutate(drug = ifelse(str_detect(drug, "_ACBI3_"), "ACBI3", drug))
+
+df_long_editing <-
+  df_long_editing %>%
+  mutate(drug = ifelse(str_detect(drug, "_FLARE_"), "control", drug)) %>%
+    mutate(drug = ifelse(str_detect(drug, "_BI_"), "BI-2865", drug)) %>%
+  mutate(drug = ifelse(str_detect(drug, "_MRTX_"), "MRTX1133", drug)) %>%
+  mutate(drug = ifelse(str_detect(drug, "_RMC_"), "RMC-6236", drug)) %>%
+  mutate(drug = ifelse(str_detect(drug, "_ACBI3_"), "ACBI3", drug))
+
+#join editing and zscore
+df_long <- 
+  left_join(df_long_zscore, df_long_editing)
+
+df_long <-
+  df_long %>%
+  mutate(mutation_id = paste(gene, mutation, id)) %>%
+  distinct()
+
+df_long
+```
+
+```{r}
+#subset of selected variants for validation
+KRAS_structure %>%
+  filter(domain == "switch_II") %>%
+  select(amino_acid_position) %>%
+  distinct()
+
+#factor the drug order
+df_long <- df_long %>%
+  mutate(drug = fct_relevel(drug, "control", after = Inf))
+
+df_long <-
+  df_long %>%
+  mutate(drug = factor(drug, levels = c("ACBI3","RMC-6236", "BI-2865", "MRTX1133", "control"))) %>%
+  distinct()
+
+plot1 <- 
+  ggplot(subset(df_long, gene == "KRAS"), aes(x = amino_acid_position, y = z_score, colour = drug, size = editing, shape = mutation_type)) +
+  geom_point() +
+  scale_size_continuous(range = c(0.1, 2.7)) +
+geom_hline(yintercept=c(0),linetype="dotted") +
+    scale_color_manual(values =c("red3","black", "royalblue2", "orange", "grey70"))+
+  xlab("KRAS amino acid position") +
+  ylab("z-score") + 
+  labs(size = "sensor editing") +
+    labs(shape = "consequence") +
+  theme_classic() 
+plot1
+ggsave("Fig.RAS_prime_footprint.eps", width = 7.5, height = 4.75, path ="./figures_export")
 ```
