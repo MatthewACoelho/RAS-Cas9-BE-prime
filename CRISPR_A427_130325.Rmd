@@ -997,3 +997,45 @@ merged_df %>%
 merged_df %>%
   write.csv("Cas9.csv")
 ```
+
+```{r}
+#long format - MAGecK
+file_list <- list.files(
+  path = "MAGeCK/results/MAGECK/AVERAGE",
+  pattern = "_average\\.gene_summary\\.txt$",
+  full.names = TRUE
+)
+
+extract_interest_wide <- function(file) {
+  condition <- basename(file) %>%
+    str_remove("_avereage\\.gene_summary\\.txt$")
+
+  read_delim(file, show_col_types = FALSE) %>%
+    rename(gene = id) %>%
+    mutate(condition = condition)
+}
+
+MAGeCK_long <- 
+  map_dfr(file_list, extract_interest_wide)
+
+MAGeCK_long
+```
+
+```{r}
+#data long - add metadata
+MAGeCK_long <-
+  MAGeCK_long %>%
+  rename(drug = condition) %>%
+        mutate(drug = ifelse(str_detect(drug, "_T0"), "T0", drug)) %>%
+    mutate(drug = ifelse(str_detect(drug, "_plasmid"), "Control", drug)) %>%
+    mutate(drug = ifelse(str_detect(drug, "_BI2865_"), "BI-2865", drug)) %>%
+  mutate(drug = ifelse(str_detect(drug, "_MRTX1133_"), "MRTX1133", drug)) %>%
+  mutate(drug = ifelse(str_detect(drug, "_RMC6236_"), "RMC-6236", drug)) %>%
+  mutate(drug = ifelse(str_detect(drug, "_A3BI3_"), "ACBI3", drug))
+
+MAGeCK_long %>%
+  count(drug)
+
+MAGeCK_long %>%
+  write.csv("Cas9_supplemental_table.csv")
+```
