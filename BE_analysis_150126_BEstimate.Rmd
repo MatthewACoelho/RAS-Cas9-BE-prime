@@ -1896,6 +1896,8 @@ theme_classic()
 
 #print the plot
 plot1
+
+write.csv(Coverage, "coverage_BE.csv")
 ```
 
 ```{r}
@@ -2818,7 +2820,7 @@ multi_modal_BE_nested <-
 ```
 
 ```{r}
-#plot all genes - mulitmodal_BE_nested
+#plot all genes - multimodal_BE_nested
 
 plot1 <- ggplot(subset(multi_modal_BE_nested, gene %in% c(targets$gene)), aes(x= amino_acid_position_simple, y= L2FC_A427_ABE_RMC_plasmid_average_zscore, size =  neg.lfc_MAGeCK_RMC6236 , colour = L2FC_H23_ABE_RMC_plasmid_average_zscore)) + 
 geom_point(position = pos) +
@@ -3194,6 +3196,7 @@ plot1 <- pheatmap(
 )
 plot1
 ```
+
 ```{r}
 # annotated data number of hits with potential off-targets
 #hits with off-targets (z-score >3)
@@ -3218,4 +3221,96 @@ annotated_data %>%
   arrange(Gene) %>%
   distinct() %>%
   write.csv("off_targets.csv" ,row.names = FALSE)
+```
+
+```{r}
+#make a long table
+df_long <-
+annotated_data %>%
+  select(sgRNA_ID, new_ID, sgRNA_type, gRNA_class, gene_alias, Gene, guide, G_guide, contains("_plasmid_average_zscore"), most_severe_consequence, Protein_Position, Protein_Change, Protein_ID, PTM, curated_Domain, sift_prediction, Transcript_ID, exact, mm1, mm2, cosmic_id, clinical_id) %>%
+  rename(gene = Gene) %>%
+  pivot_longer(
+    cols = matches("^L2FC_.*_plasmid_average_zscore$"),
+    names_to = c("cell_line", "editor", "drug"),
+    names_pattern = "^L2FC_([^_]+)_([^_]+)_([^_]+)_plasmid_average_zscore$",
+    values_to = "z_score"
+  ) %>%
+  select(-editor, -new_ID) %>%
+  distinct()
+
+df_long
+```
+
+```{r}
+#long format - MAGecK
+file_list <- list.files(
+  path = "./results/MAGECK_RRA/COMBINED",
+  pattern = "\\.sgrna_summary\\.txt$",
+  full.names = TRUE
+)
+
+extract_interest_wide <- function(file) {
+  condition <- basename(file) %>%
+    str_remove("_combined\\.sgrna_summary\\.txt$")
+
+  read_delim(file, show_col_types = FALSE) %>%
+    rename(id = sgrna, gene = Gene) %>%
+    select(id, gene, LFC, `p.low`, `p.high`, FDR) %>%
+    mutate(condition = condition)
+}
+
+MAGeCK_long <- 
+  map_dfr(file_list, extract_interest_wide) %>%
+  rename(sgRNA_ID = id)
+```
+
+```{r}
+#join long table to MAGeCK table
+MAGeCK_long <- 
+  MAGeCK_long %>%
+  rename(drug=condition) %>%
+  mutate(cell_line = ifelse(str_detect(drug, "H23"), "H23", "A427")) %>%
+  mutate(drug = ifelse(str_detect(drug, "ACBI3"), "ACBI3", 
+                       ifelse(str_detect(drug, "MRTX"),"MRTX1133", 
+                                   ifelse(str_detect(drug, "RMC"),"RMC-6236", 
+                                           ifelse(str_detect(drug, "Ctrl"),"control", 
+                                                             ifelse(str_detect(drug, "BI"),"BI-2865",
+                                                                                                      drug)))))) %>%
+  select(-gene)
+
+#rename drugs
+df_long <- 
+  df_long %>%
+  mutate(drug = ifelse(str_detect(drug, "ACBI3"), "ACBI3", 
+                       ifelse(str_detect(drug, "MRTX"),"MRTX1133", 
+                                   ifelse(str_detect(drug, "RMC"),"RMC-6236", 
+                                           ifelse(str_detect(drug, "CTRL"),"control", 
+                                                             ifelse(str_detect(drug, "BI"),"BI-2865",
+                                                                                                      drug))))))
+```
+
+```{r}
+#left_join to make a long table
+Supplementary_table <-
+  left_join(df_long, MAGeCK_long) %>%
+  mutate(pvalue = ifelse(LFC >0, p.high, p.low)) %>%
+  select(-p.low, -p.high, -LFC)
+```
+
+```{r}
+#write the supplementary table
+Supplementary_table %>%
+  write.csv("supplementary_table.csv", row.names = FALSE)
+```
+
+```{r}
+#calculate number of predicted non-synonymous variants
+Supplementary_table %>%
+  filter(most_severe_consequence != "synonymous") %>%
+  filter(drug == "control") %>%
+  filter(cell_line == "A427") %>%
+  filter(is.na(most_severe_consequence) == FALSE) %>%
+  filter(most_severe_consequence != "") %>%
+    filter(most_severe_consequence != "intron") %>%
+  distinct()
 ```
