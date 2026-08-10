@@ -1,0 +1,1753 @@
+---
+title: "Untitled"
+author: "mc"
+date: "2026-04-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#get rid of duplicates
+# filter on low reads counts
+```
+
+```{r}
+# load packages
+library(stringdist)
+library(tidyverse)
+library(reshape2)
+library(ggrepel)
+library(stringr)
+library(digest)
+library(spgs)
+library(ggpointdensity)
+library(pheatmap)
+library(RColorBrewer)
+library(patchwork)
+library(forcats)
+library(ggnewscale)
+library(scales)
+library(yardstick)
+```
+
+```{r}
+# define functions
+RPM <- function(x) (((x/sum(x)) *1000000) + 1)
+average <- function(x,y) ((x + y) /2)
+L2FC <- function(x,y) (log2(x/y))
+zscore <- function(x) ((x-mean(x))/sd(x))
+```
+
+```{r}
+# read in the library table for short pycroquet with the guide + scaffold + extension
+lib <- as_tibble(read.csv("KRAS_synprime_Twist6k_13.10.25.csv", stringsAsFactors = FALSE, header = TRUE))
+
+#enumerate lib pegRNAs
+lib 
+
+lib <-
+  lib %>%
+  rename(id = "ID")
+```
+
+```{r}
+#synprime screen analysis
+#pycroquet 174 forward read - gRNA + scaffold + extension
+# List all .counts.tsv files in the /results directory
+file_list <- list.files(path = "pycroquet_single_174_forward", pattern = "\\.counts\\.tsv$", full.names = TRUE)
+
+# Function to read and prepare each file
+read_and_prepare <- function(file) {
+  df <- read_tsv(file, skip = 2, show_col_types = FALSE) %>%
+    select(-`#id`, -unique_guide, -gene_pair_id, -sgrna_seqs) %>%
+    rename(id = sgrna_ids)
+  
+  # Get the current count column name (not "id") and generate new name
+  count_col <- setdiff(names(df), "id")
+  sample_name <- tools::file_path_sans_ext(basename(file)) %>% str_remove("\\.counts$")
+  new_colname <- paste0(sample_name, "_synprime_pyc_reads")
+  
+  df %>% rename(!!new_colname := all_of(count_col))
+}
+
+# Join all tables by 'id'
+synprime_reads <- file_list %>%
+  map(read_and_prepare) %>%
+  reduce(full_join, by = "id")
+
+synprime_reads
+```
+
+```{r}
+#get rid of Re-Extraction label
+synprime_reads %>%
+  select(contains("Re-extraction"))
+
+synprime_reads <- synprime_reads %>%
+  rename_with(~ str_remove(.x, "Re-Extraction_"))
+```
+
+```{r}
+#function to sum lanes (2 lanes of Avitis have been sequenced)
+collapse_lanes <- function(df, lane_regex = "_L[12]_PE_synprime_pyc_reads$") {
+  # all lane-specific read columns (…_L1_reads or …_L2_PE_synprime_pyc_reads)
+  laned <- names(df) %>% str_subset(lane_regex)
+  if (length(laned) == 0) return(df)
+
+  # base sample name without lane suffix
+  bases <- str_replace(laned, lane_regex, "")
+  groups <- split(laned, bases)  # list: base -> its lane columns
+
+  # make combined columns by summing lanes row-wise
+  for (b in names(groups)) {
+    cols <- groups[[b]]
+    df[[paste0(b, "_reads")]] <- rowSums(df[, cols, drop = FALSE], na.rm = TRUE)
+  }
+
+  # drop original lane columns
+  df %>% select(-all_of(laned))
+}
+```
+
+```{r}
+#merge lane counts from Element Aviti
+synprime_reads <- 
+  collapse_lanes(synprime_reads)
+synprime_reads
+```
+
+```{r}
+# quality CTRL plots
+# plasmid
+plot1 <- ggplot(synprime_reads, aes(y= KRAS_SYN_Plasmid_reads)) + 
+geom_histogram() +
+labs(title= "plasmid Reads")
+plot1
+
+plot2 <- ggplot(synprime_reads, aes(y= A427_Par_SYN_Ctrl_T0_R1_reads)) + 
+geom_histogram() +
+labs(title= "control T0")
+plot2
+```
+
+```{r}
+#very high read depth and equal pegRNA distribution means no pegRNAs need to be filtered out
+#plasmid reads
+synprime_reads %>%
+  select(id, KRAS_SYN_Plasmid_reads) %>%
+  arrange(KRAS_SYN_Plasmid_reads)
+
+#T0 reads
+synprime_reads %>%
+  select(id, A427_Par_SYN_Ctrl_T0_R1_reads) %>%
+  arrange(A427_Par_SYN_Ctrl_T0_R1_reads)
+
+synprime_reads %>%
+  select(id, A427_Par_SYN_Ctrl_T0_R2_reads) %>%
+  arrange(A427_Par_SYN_Ctrl_T0_R2_reads)
+
+synprime_reads %>%
+  filter(A427_Par_SYN_Ctrl_T0_R1_reads < 100 | A427_Par_SYN_Ctrl_T0_R2_reads < 100)
+```
+
+```{r}
+#plot parameters
+pos <- position_jitter(seed = 2, width = 0.2, height = 0.2)
+set.seed(seed=2)
+
+read_threshold <- 100
+```
+
+```{r}
+#replicate correlation Pearson
+r1 <- cor(synprime_reads$A427_PE_SYN_Ctrl_R1_reads, synprime_reads$A427_PE_SYN_Ctrl_R2_reads, method = "pearson")
+cor.test(synprime_reads$A427_PE_SYN_Ctrl_R1_reads, synprime_reads$A427_PE_SYN_Ctrl_R2_reads, method = "pearson", use="complete.obs")
+
+#correlation between synprime data readcount replicated ctrl
+plot1 <- ggplot(synprime_reads, aes(x = A427_PE_SYN_Ctrl_R1_reads, y = A427_PE_SYN_Ctrl_R2_reads)) +
+geom_pointdensity(size = 0.5, position = pos) +
+theme_classic() +
+    labs(colour = "density") +
+  geom_smooth(method = lm, colour = "salmon")+
+  xlab("R1 \n A427_PE_SYN_Ctrl reads") +
+  ylab("R2 \n A427_PE_SYN_Ctrl reads") +
+  annotate("text", y = 6000, x = 2000, label = paste("r =", round(r1, 2)), parse = FALSE, size = 3.5) 
+plot1
+ggsave("NGS_reads_correlation.eps", width = 4.5, height = 3.5, path ="./figures_export")
+
+#replicate correlation Pearson MRTX
+r2 <- cor(synprime_reads$A427_PE_SYN_MRTX_R1_reads, synprime_reads$A427_PE_SYN_MRTX_R2_reads, method = "pearson")
+cor.test(synprime_reads$A427_PE_SYN_MRTX_R1_reads, synprime_reads$A427_PE_SYN_MRTX_R2_reads, method = "pearson", use="complete.obs")
+
+#correlation between synprime data readcount replicated MRTX
+plot2 <- ggplot(synprime_reads, aes(x = A427_PE_SYN_MRTX_R1_reads, y = A427_PE_SYN_MRTX_R2_reads)) +
+geom_pointdensity(size = 0.5, position = pos) +
+theme_classic() +
+    labs(colour = "density") +
+  geom_smooth(method = lm, colour = "salmon")+
+  xlab("R1 \n A427_PE_SYN_MRTX reads") +
+  ylab("R2 \n A427_PE_SYN_MRTX reads") +
+  annotate("text", y = 60000, x = 20000, label = paste("r =", round(r2, 2)), parse = FALSE, size = 3.5) 
+plot2
+
+#replicate correlation Pearson ACBI3
+r3 <- cor(synprime_reads$A427_PE_SYN_ACBI3_R1_reads, synprime_reads$A427_PE_SYN_ACBI3_R2_reads, method = "pearson")
+cor.test(synprime_reads$A427_PE_SYN_ACBI3_R1_reads, synprime_reads$A427_PE_SYN_ACBI3_R2_reads, method = "pearson", use="complete.obs")
+
+#correlation between synprime data readcount replicated ACBI3
+plot3 <- ggplot(synprime_reads, aes(x = A427_PE_SYN_ACBI3_R1_reads, y = A427_PE_SYN_ACBI3_R2_reads)) +
+geom_pointdensity(size = 0.5, position = pos) +
+theme_classic() +
+    labs(colour = "density") +
+  geom_smooth(method = lm, colour = "salmon")+
+  xlab("R1 \n A427_PE_SYN_ACBI3 reads") +
+  ylab("R2 \n A427_PE_SYN_ACBI3 reads") +
+  annotate("text", y = 60000, x = 20000, label = paste("r =", round(r3, 2)), parse = FALSE, size = 3.5) 
+plot3
+
+#replicate correlation Pearson RMC
+r4 <- cor(synprime_reads$A427_PE_SYN_RMC_R1_reads, synprime_reads$A427_PE_SYN_RMC_R2_reads, method = "pearson")
+cor.test(synprime_reads$A427_PE_SYN_RMC_R1_reads, synprime_reads$A427_PE_SYN_RMC_R2_reads, method = "pearson", use="complete.obs")
+
+#correlation between synprime data readcount replicated RMC
+plot4 <- ggplot(synprime_reads, aes(x = A427_PE_SYN_RMC_R1_reads, y = A427_PE_SYN_RMC_R2_reads)) +
+geom_pointdensity(size = 0.5, position = pos) +
+theme_classic() +
+    labs(colour = "density") +
+  geom_smooth(method = lm, colour = "salmon")+
+  xlab("R1 \n A427_PE_SYN_RMC reads") +
+  ylab("R2 \n A427_PE_SYN_RMC reads") +
+  annotate("text", y = 60000, x = 20000, label = paste("r =", round(r4, 2)), parse = FALSE, size = 3.5) 
+plot4
+
+#replicate correlation Pearson BI
+r5 <- cor(synprime_reads$A427_PE_SYN_BI_R1_reads, synprime_reads$A427_PE_SYN_BI_R2_reads, method = "pearson")
+cor.test(synprime_reads$A427_PE_SYN_BI_R1_reads, synprime_reads$A427_PE_SYN_BI_R2_reads, method = "pearson", use="complete.obs")
+
+#correlation between synprime data readcount replicated BI
+plot4 <- ggplot(synprime_reads, aes(x = A427_PE_SYN_BI_R1_reads, y = A427_PE_SYN_BI_R2_reads)) +
+geom_pointdensity(size = 0.5, position = pos) +
+theme_classic() +
+    labs(colour = "density") +
+  geom_smooth(method = lm, colour = "salmon")+
+  xlab("R1 \n A427_PE_SYN_BI reads") +
+  ylab("R2 \n A427_PE_SYN_BI reads") +
+  annotate("text", y = 60000, x = 20000, label = paste("r =", round(r5, 2)), parse = FALSE, size = 3.5) 
+plot4
+```
+
+```{r}
+#left join reads to the library annotations
+synprime_df <-
+left_join(synprime_reads, lib)
+
+synprime_df
+```
+
+```{r}
+#compute average reads for R1 and R2 
+# 1) Identify R1/R2 column pairs
+meta <- tibble(col = names(synprime_df)) %>%
+  mutate(
+    prefix = str_match(col, "^(.*)_R[12]_reads(.*)$")[, 2],
+    suffix = str_match(col, "^(.*)_R[12]_reads(.*)$")[, 3]
+  ) %>%
+  filter(!is.na(prefix)) %>%
+  group_by(prefix, suffix) %>%
+  summarise(cols = list(col), .groups = "drop") %>%
+  filter(lengths(cols) == 2)
+
+# 2) Add averaged columns (keeps R1/R2)
+synprime_df <- reduce(
+  .x = seq_len(nrow(meta)),
+  .init = synprime_df,
+  .f = \(df, i) {
+    cols <- meta$cols[[i]]
+    # Build name cleanly, handling empty suffix
+    parts <- c(meta$prefix[i], "average_reads", meta$suffix[i])
+    parts <- parts[nzchar(parts)]  # drop empty strings
+    new_name <- paste(parts, collapse = "_")
+    # Strip any leading underscore from suffix before joining
+    new_name <- str_replace(new_name, "_+", "_")
+    
+    df %>%
+      mutate(!!new_name := rowMeans(as.matrix(pick(all_of(cols))), na.rm = TRUE))
+  }
+)
+synprime_df
+```
+
+```{r}
+#RPM
+synprime_df <- synprime_df %>%
+  mutate(across(ends_with("_reads"),
+                ~ RPM(.),
+                .names = "{.col}_RPM"))
+```
+
+```{r}
+#find duplicates in the pycroquet mapping library
+plasmid <- as_tibble(read.delim("pycroquet_single_174_forward/KRAS_SYN_Plasmid_L1_PE.counts.tsv",  skip = 2, stringsAsFactors = FALSE, header = TRUE, sep = "\t"))
+
+plasmid <-
+  plasmid %>%
+  select(-gene_pair_id, unique_guide, reads_KRAS_SYN_Plasmid_L1_counts) %>%
+  rename(id = X.id)
+
+# join sgRNA_seqs used for pycroquet mapping to the dataframe to remove duplicates - left join
+synprime_df <- 
+  left_join(synprime_df, plasmid)
+synprime_df
+```
+
+```{r}
+#these duplicates are an unfortunate introduction due to the fact that CGC as the first bases of the evopreq can match to other, shorter extension sequences. Secondly, the fact that we are introducing synonysmous variants means that some sysnonymous variants are the same as aothers (inteded plus bystander = bystander plus intended)
+ 
+#this rare event equates to 94 duplications out of 5,302 pegRNAs -20 188 will be removed
+synprime_df %>%
+  select(sgrna_seqs) %>%
+  distinct()
+
+#duplicates
+synprime_df %>%
+  select(sgrna_seqs) %>%
+  count(sgrna_seqs) %>%
+  arrange(desc(n))
+
+synprime_df %>%
+  select(sgrna_seqs) %>%
+  count(sgrna_seqs) %>%
+  filter(n>1)
+
+duplicate_pycroquet <- 
+  synprime_df %>%
+  select(sgrna_seqs) %>%
+  count(sgrna_seqs) %>%
+  filter(n>1)
+
+duplicate_pycroquet
+
+#this equates to 94 ids
+#duplicate_pycroquet_ids
+left_join(duplicate_pycroquet, synprime_df) %>%
+  select(id) %>%
+  distinct()
+
+duplicate_pycroquet_ids <-
+left_join(duplicate_pycroquet, synprime_df) %>%
+  select(id) %>%
+  distinct()
+
+left_join(duplicate_pycroquet_ids, lib) %>%
+  distinct()
+```
+
+```{r}
+#these are exclusively synonymous pegRNAs
+duplicate_pycroquet_ids
+
+synprime_df <-
+synprime_df %>%
+  filter(id %in% c(duplicate_pycroquet_ids$id) == FALSE)
+
+synprime_df %>%
+  count(Mutation)
+
+#1326 distinct mutations, so will need to have 50 reads per variant to cover each variant with 5 reads assuming a 10 % editing rate
+```
+
+```{r}
+#compute L2FC - T0 
+
+#ACBI3
+synprime_df <- mutate(synprime_df, L2FC_A427_PE_SYN_ACBI3_R1 = L2FC(A427_PE_SYN_ACBI3_R1_reads_RPM, A427_Par_SYN_Ctrl_T0_R1_reads_RPM))
+synprime_df <- mutate(synprime_df, L2FC_A427_PE_SYN_ACBI3_R2 = L2FC(A427_PE_SYN_ACBI3_R2_reads_RPM, A427_Par_SYN_Ctrl_T0_R2_reads_RPM))
+synprime_df <- mutate(synprime_df, L2FC_A427_PE_SYN_ACBI3_average = L2FC(A427_PE_SYN_ACBI3_average_reads_RPM, A427_Par_SYN_Ctrl_T0_average_reads_RPM))
+
+#MRTX1133
+synprime_df <- mutate(synprime_df, L2FC_A427_PE_SYN_MRTX1133_R1 = L2FC(A427_PE_SYN_MRTX_R1_reads_RPM, A427_Par_SYN_Ctrl_T0_R1_reads_RPM))
+synprime_df <- mutate(synprime_df, L2FC_A427_PE_SYN_MRTX1133_R2 = L2FC(A427_PE_SYN_MRTX_R2_reads_RPM, A427_Par_SYN_Ctrl_T0_R2_reads_RPM))
+synprime_df <- mutate(synprime_df, L2FC_A427_PE_SYN_MRTX1133_average = L2FC(A427_PE_SYN_MRTX_average_reads_RPM, A427_Par_SYN_Ctrl_T0_average_reads_RPM))
+
+#RMC6236
+synprime_df <- mutate(synprime_df, L2FC_A427_PE_SYN_RMC6236_R1 = L2FC(A427_PE_SYN_RMC_R1_reads_RPM, A427_Par_SYN_Ctrl_T0_R1_reads_RPM))
+synprime_df <- mutate(synprime_df, L2FC_A427_PE_SYN_RMC6236_R2 = L2FC(A427_PE_SYN_RMC_R2_reads_RPM, A427_Par_SYN_Ctrl_T0_R2_reads_RPM))
+synprime_df <- mutate(synprime_df, L2FC_A427_PE_SYN_RMC6236_average = L2FC(A427_PE_SYN_RMC_average_reads_RPM, A427_Par_SYN_Ctrl_T0_average_reads_RPM))
+
+#BI2865
+synprime_df <- mutate(synprime_df, L2FC_A427_PE_SYN_BI2865_R1 = L2FC(A427_PE_SYN_BI_R1_reads_RPM, A427_Par_SYN_Ctrl_T0_R1_reads_RPM))
+synprime_df <- mutate(synprime_df, L2FC_A427_PE_SYN_BI2865_R2 = L2FC(A427_PE_SYN_BI_R2_reads_RPM, A427_Par_SYN_Ctrl_T0_R2_reads_RPM))
+synprime_df <- mutate(synprime_df, L2FC_A427_PE_SYN_BI2865_average = L2FC(A427_PE_SYN_BI_average_reads_RPM, A427_Par_SYN_Ctrl_T0_average_reads_RPM))
+
+#BI2865
+synprime_df <- mutate(synprime_df, L2FC_A427_PE_SYN_Control_R1 = L2FC(A427_PE_SYN_Ctrl_R1_reads_RPM, A427_Par_SYN_Ctrl_T0_R1_reads_RPM))
+synprime_df <- mutate(synprime_df, L2FC_A427_PE_SYN_Control_R2 = L2FC(A427_PE_SYN_Ctrl_R2_reads_RPM, A427_Par_SYN_Ctrl_T0_R2_reads_RPM))
+synprime_df <- mutate(synprime_df, L2FC_A427_PE_SYN_Control_average = L2FC(A427_PE_SYN_Ctrl_average_reads_RPM, A427_Par_SYN_Ctrl_T0_average_reads_RPM))
+```
+
+```{r}
+#z-score
+synprime_df <- 
+  synprime_df %>%
+  mutate(across(starts_with("L2FC"),
+                ~ zscore(.),
+                .names = "{.col}_zscore"))
+synprime_df
+```
+
+
+```{r}
+#plot z-score versus readcount - plasmid
+plot1 <- ggplot(synprime_df, aes(x=L2FC_A427_PE_SYN_BI2865_average, y = KRAS_SYN_Plasmid_reads)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(read_threshold),linetype="dotted") +
+  xlab("L2FC_A427_PE_SYN_BI2865_average") +
+  ylab("KRAS_SYN_Plasmid_reads") 
+plot1
+
+plot2 <- ggplot(synprime_df, aes(x=L2FC_A427_PE_SYN_MRTX1133_average, y = KRAS_SYN_Plasmid_reads)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(read_threshold),linetype="dotted") +
+  xlab("L2FC_A427_PE_SYN_MRTX1133_average") +
+  ylab("KRAS_SYN_Plasmid_reads") 
+plot2
+
+plot3 <- ggplot(synprime_df, aes(x=L2FC_A427_PE_SYN_RMC6236_average, y = KRAS_SYN_Plasmid_reads)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(read_threshold),linetype="dotted") +
+  xlab("L2FC_A427_PE_SYN_RMC6236_average") +
+  ylab("KRAS_SYN_Plasmid_reads") 
+plot3
+
+plot4 <- ggplot(synprime_df, aes(x=L2FC_A427_PE_SYN_ACBI3_average, y = KRAS_SYN_Plasmid_reads)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(read_threshold),linetype="dotted") +
+  xlab("L2FC_A427_PE_SYN_ACBI3_average") +
+  ylab("KRAS_SYN_Plasmid_reads") 
+plot4
+
+plot5 <- ggplot(synprime_df, aes(x=L2FC_A427_PE_SYN_Control_average, y = KRAS_SYN_Plasmid_reads)) +
+geom_point(size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(read_threshold),linetype="dotted") +
+  xlab("L2FC_A427_PE_SYN_Ctrl_average") +
+  ylab("KRAS_SYN_Plasmid_reads") 
+plot5
+```
+
+```{r}
+#replicate correlation Pearson
+r1 <- cor(synprime_df$L2FC_A427_PE_SYN_BI2865_R1_zscore, synprime_df$L2FC_A427_PE_SYN_BI2865_R2_zscore, method = "pearson")
+cor.test(synprime_df$L2FC_A427_PE_SYN_BI2865_R1_zscore, synprime_df$L2FC_A427_PE_SYN_BI2865_R2_zscore, method = "pearson", use="complete.obs")
+
+r2 <- cor(synprime_df$L2FC_A427_PE_SYN_MRTX1133_R1_zscore, synprime_df$L2FC_A427_PE_SYN_MRTX1133_R2_zscore, method = "pearson")
+cor.test(synprime_df$L2FC_A427_PE_SYN_MRTX1133_R1_zscore, synprime_df$L2FC_A427_PE_SYN_MRTX1133_R2_zscore, method = "pearson", use="complete.obs")
+
+r3 <- cor(synprime_df$L2FC_A427_PE_SYN_RMC6236_R1_zscore, synprime_df$L2FC_A427_PE_SYN_RMC6236_R2_zscore, method = "pearson")
+cor.test(synprime_df$L2FC_A427_PE_SYN_RMC6236_R1_zscore, synprime_df$L2FC_A427_PE_SYN_RMC6236_R2_zscore, method = "pearson", use="complete.obs")
+
+r4 <- cor(synprime_df$L2FC_A427_PE_SYN_ACBI3_R1_zscore, synprime_df$L2FC_A427_PE_SYN_ACBI3_R2_zscore, method = "pearson")
+cor.test(synprime_df$L2FC_A427_PE_SYN_ACBI3_R1_zscore, synprime_df$L2FC_A427_PE_SYN_ACBI3_R2_zscore, method = "pearson", use="complete.obs")
+
+r5 <- cor(synprime_df$L2FC_A427_PE_SYN_Control_R1_zscore, synprime_df$L2FC_A427_PE_SYN_Control_R2_zscore, method = "pearson")
+cor.test(synprime_df$L2FC_A427_PE_SYN_Control_R1_zscore, synprime_df$L2FC_A427_PE_SYN_Control_R2_zscore, method = "pearson", use="complete.obs")
+```
+
+```{r}
+max_overalps <- 20
+zscore_threshold <- 3
+```
+
+```{r}
+#BI2865
+scores <- 
+  synprime_df %>%
+  group_by(Mutation) %>%
+  mutate(label = ifelse(L2FC_A427_PE_SYN_BI2865_average_zscore == max(L2FC_A427_PE_SYN_BI2865_average_zscore) & L2FC_A427_PE_SYN_BI2865_average_zscore > zscore_threshold,
+                        as.character(Mutation), NA_character_)) %>%
+  ungroup()
+```
+
+```{r}
+#replicate correlation 
+
+plot1 <- ggplot(scores, aes(x=L2FC_A427_PE_SYN_BI2865_R1_zscore, y = L2FC_A427_PE_SYN_BI2865_R2_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("A427 BI2865 R1 (z-score)") +
+  ylab("A427 BI2865 R2 (z-score)") +
+  #annotate("text", y = 1, x = -2, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) +
+ geom_text_repel(aes(label = label),
+   size=2, max.overlaps = Inf, segment.size = 0.2, show.legend = FALSE) +
+  annotate("text", y = 3, x = -3, label = paste("r =", round(r1, 2)), parse = FALSE, size = 3.5)
+plot1
+ggsave("BI2865_reps.eps", width = 4, height = 4, path ="./figures_export")
+```
+
+```{r}
+#MRTX1133
+scores <- 
+  synprime_df %>%
+  group_by(Mutation) %>%
+  mutate(label = ifelse(L2FC_A427_PE_SYN_MRTX1133_average_zscore == max(L2FC_A427_PE_SYN_MRTX1133_average_zscore) & L2FC_A427_PE_SYN_MRTX1133_average_zscore > zscore_threshold,
+                        as.character(Mutation), NA_character_)) %>%
+  ungroup()
+```
+
+```{r}
+plot2 <- ggplot(scores, aes(x=L2FC_A427_PE_SYN_MRTX1133_R1_zscore, y = L2FC_A427_PE_SYN_MRTX1133_R2_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("A427 MRTX1133 R1 (z-score)") +
+  ylab("A427 MRTX1133 R2 (z-score)") +
+  #annotate("text", y = 1, x = -2, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) +
+  geom_text_repel(aes(label=ifelse(L2FC_A427_PE_SYN_MRTX1133_R1_zscore > zscore_threshold & L2FC_A427_PE_SYN_MRTX1133_R2_zscore > zscore_threshold, paste(Mutation), "")), size=2, max.overlaps = max_overalps, segment.size = 0.2) +
+    annotate("text", y = 3, x = -3, label = paste("r =", round(r2, 2)), parse = FALSE, size = 3.5)
+plot2
+ggsave("MRTX1133_reps.eps", width = 4, height = 4, path ="./figures_export")
+```
+
+```{r}
+#RMC6236
+scores <- 
+  synprime_df %>%
+  group_by(Mutation) %>%
+  mutate(label = ifelse(L2FC_A427_PE_SYN_RMC6236_average_zscore == max(L2FC_A427_PE_SYN_RMC6236_average_zscore) & L2FC_A427_PE_SYN_RMC6236_average_zscore > zscore_threshold,
+                        as.character(Mutation), NA_character_)) %>%
+  ungroup()
+```
+
+```{r}
+plot3 <- ggplot(scores, aes(x=L2FC_A427_PE_SYN_RMC6236_R1_zscore, y = L2FC_A427_PE_SYN_RMC6236_R2_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("A427 RMC6236 R1 (z-score)") +
+  ylab("A427 RMC6236 R2 (z-score)") +
+  #annotate("text", y = 1, x = -2, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) +
+  geom_text_repel(aes(label=ifelse(L2FC_A427_PE_SYN_RMC6236_R1_zscore > zscore_threshold & L2FC_A427_PE_SYN_RMC6236_R2_zscore > zscore_threshold, paste(Mutation), "")), size=2, max.overlaps = max_overalps, segment.size = 0.2) +
+    annotate("text", y = 3, x = -3, label = paste("r =", round(r3, 2)), parse = FALSE, size = 3.5)
+plot3
+ggsave("RMC6236_reps.eps", width = 4, height = 4, path ="./figures_export")
+```
+
+```{r}
+#ACBI3
+scores <- 
+  synprime_df %>%
+  group_by(Mutation) %>%
+  mutate(label = ifelse(L2FC_A427_PE_SYN_ACBI3_average_zscore == max(L2FC_A427_PE_SYN_ACBI3_average_zscore) & L2FC_A427_PE_SYN_ACBI3_average_zscore > zscore_threshold,
+                        as.character(Mutation), NA_character_)) %>%
+  ungroup()
+```
+
+```{r}
+plot4 <- ggplot(scores, aes(x=L2FC_A427_PE_SYN_ACBI3_R1_zscore, y = L2FC_A427_PE_SYN_ACBI3_R2_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("A427 ACBI3 R1 (z-score)") +
+  ylab("A427 ACBI3 R2 (z-score)") +
+  #annotate("text", y = 1, x = -2, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) +
+  geom_text_repel(aes(label=ifelse(L2FC_A427_PE_SYN_ACBI3_R1_zscore > zscore_threshold & L2FC_A427_PE_SYN_ACBI3_R2_zscore > zscore_threshold, paste(Mutation), "")), size=2, max.overlaps = max_overalps, segment.size = 0.2) +
+    annotate("text", y = 3, x = -3, label = paste("r =", round(r4, 2)), parse = FALSE, size = 3.5)
+plot4
+ggsave("ACBI3_reps.eps", width = 4, height = 4, path ="./figures_export")
+```
+
+```{r}
+#Control
+scores <- 
+  synprime_df %>%
+  group_by(Mutation) %>%
+  mutate(label = ifelse(L2FC_A427_PE_SYN_Control_average_zscore == max(L2FC_A427_PE_SYN_Control_average_zscore) & L2FC_A427_PE_SYN_Control_average_zscore > zscore_threshold,
+                        as.character(Mutation), NA_character_)) %>%
+  ungroup()
+```
+
+```{r}
+plot5 <- ggplot(scores, aes(x=L2FC_A427_PE_SYN_Control_R1_zscore, y = L2FC_A427_PE_SYN_Control_R2_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("A427 control R1 (z-score)") +
+  ylab("A427 control R2 (z-score)") +
+  #annotate("text", y = 1, x = -2, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) +
+  geom_text_repel(aes(label=ifelse(L2FC_A427_PE_SYN_Control_R1_zscore < -zscore_threshold & L2FC_A427_PE_SYN_Control_R2_zscore < -zscore_threshold, paste(Mutation), "")), size=2, max.overlaps = max_overalps, segment.size = 0.2) +
+    annotate("text", y = 3, x = -3, label = paste("r =", round(r5, 2)), parse = FALSE, size = 3.5)
+plot5
+ggsave("Control_reps_.eps", width = 4, height = 4, path ="./figures_export")
+```
+
+```{r}
+#add mutation type
+synprime_df <-
+synprime_df %>%
+ mutate(Edited.AA = str_remove_all(Edited.AA, ":")) %>%
+  mutate(Edited.AA = str_remove_all(Edited.AA, "mut1")) %>%
+    mutate(Edited.AA = str_remove_all(Edited.AA, "mut2")) %>%
+    mutate(Edited.AA = str_remove_all(Edited.AA, "mut3")) %>%
+    mutate(Edited.AA = str_remove_all(Edited.AA, "mut4")) %>%
+    mutate(Edited.AA = str_remove_all(Edited.AA, "mut5")) %>%
+  mutate(mutation_type = 
+                              ifelse(Gene == "non-targeting", "non-targeting",
+           ifelse(Original.AA == Edited.AA, "synonymous",
+            ifelse(str_detect(Edited.AA, "STOP"), "nonsense", 
+                   "missense"))))
+```
+
+```{r}
+#control gRNA distributions - filtered
+plot1 <- ggplot(synprime_df, aes(y = mutation_type, x = L2FC_A427_PE_SYN_Control_average_zscore )) + 
+geom_point(position = pos, alpha = 1, size =0.5) +
+geom_hline(yintercept=c(0,0),linetype="dotted") +
+geom_vline(xintercept=c(0,0),linetype="dotted") +
+#  geom_text_repel(aes(label=ifelse(L2FC_A427_PE_SYN_Control_average_zscore > 4, mutation, "")), size=3, max.overlaps = Inf, segment.size = 0.2) +
+scale_shape_manual(values =c(19, 1)) +
+  geom_boxplot(colour = "salmon", alpha = 0) +
+  theme_classic()
+plot1
+
+synprime_df %>%
+  filter(mutation_type == "nonsense") %>%
+  select(L2FC_A427_PE_SYN_Control_average_zscore, mutation_type, AA.number)
+  
+```
+```{r}
+#DEPLETION - ROC versus NT
+df <- synprime_df %>%
+  mutate(
+    class = case_when(
+      mutation_type == "nonsense" & Gene == "KRAS" &  AA.number < 75 ~ "positive",
+      mutation_type %in% c("non-targeting") ~ "negative",
+      TRUE ~ NA_character_
+    ),
+    class = factor(class, levels = c("positive", "negative")) # order matters for yardstick
+  ) %>%
+  filter(!is.na(class))
+
+df <- df %>% mutate(score = -L2FC_A427_PE_SYN_Control_average_zscore)
+
+# n counts per group
+n_counts <- df %>% count(class)
+n_pos <- n_counts %>% filter(class == "positive") %>% pull(n)
+n_neg <- n_counts %>% filter(class == "negative") %>% pull(n)
+
+roc_data <- df %>%
+  roc_curve(truth = class, score, event_level = "first")
+
+auc_val <- df %>%
+  roc_auc(truth = class, score, event_level = "first")
+
+auc_val
+
+annotation_label <- paste0(
+  "AUC = ", round(auc_val$.estimate, 3), "\n",
+  "n(nonsense) = ", n_pos, "\n",
+  "n(non-targeting) = ", n_neg
+)
+
+ggplot(roc_data, aes(x = 1 - specificity, y = sensitivity)) +
+  geom_path(color = "salmon", linewidth = 0.5) +
+  geom_abline(lty = 3, color = "gray50") +
+  annotate(
+    "text",
+    x = 0.6, y = 0.4,
+    label = annotation_label,
+    hjust = 0, vjust = 0,
+    size = 3.5
+  ) +
+  coord_equal() +
+  labs(
+    title = "ROC: \nKRAS nonsense vs. non-targeting pegRNAs",
+    x = "1 - specificity (FPR)",
+    y = "sensitivity (TPR)", size = 2
+    ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 11.5)
+  )
+ggsave("ROC1.eps", width = 4.5, height = 4.5, path ="./figures_export")
+```
+
+```{r}
+#DEPLETION vs synonymous
+df <- synprime_df %>%
+  mutate(
+    class = case_when(
+      mutation_type == "nonsense" & Gene == "KRAS" &  AA.number < 75 ~ "positive",
+      mutation_type %in% c("synonymous") ~ "negative",
+      TRUE ~ NA_character_
+    ),
+    class = factor(class, levels = c("positive", "negative")) # order matters for yardstick
+  ) %>%
+  filter(!is.na(class))
+
+df <- df %>% mutate(score = -L2FC_A427_PE_SYN_Control_average_zscore)
+
+# n counts per group
+n_counts <- df %>% count(class)
+n_pos <- n_counts %>% filter(class == "positive") %>% pull(n)
+n_neg <- n_counts %>% filter(class == "negative") %>% pull(n)
+
+roc_data <- df %>%
+  roc_curve(truth = class, score, event_level = "first")
+
+auc_val <- df %>%
+  roc_auc(truth = class, score, event_level = "first")
+
+auc_val
+
+annotation_label <- paste0(
+  "AUC = ", round(auc_val$.estimate, 3), "\n",
+  "n(nonsense) = ", n_pos, "\n",
+  "n(synonymous) = ", n_neg
+)
+
+ggplot(roc_data, aes(x = 1 - specificity, y = sensitivity)) +
+  geom_path(color = "salmon", linewidth = 0.5) +
+  geom_abline(lty = 3, color = "gray50") +
+  annotate(
+    "text",
+    x = 0.6, y = 0.4,
+    label = annotation_label,
+    hjust = 0, vjust = 0,
+    size = 3.5
+  ) +
+  coord_equal() +
+  labs(
+    title = "ROC: \nKRAS nonsense vs. synonymous pegRNAs",
+    x = "1 - specificity (FPR)",
+    y = "sensitivity (TPR)"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 11.5))
+ggsave("ROC2.eps", width = 4.5, height = 4.5, path ="./figures_export")
+```
+
+```{r}
+#RESISTANCE - ROC versus NT
+df <- synprime_df %>%
+  mutate(
+    class = case_when(
+      mutation_type == "missense" & Gene == "KRAS" &  AA.number %in% c("71", "64") ~ "positive",
+      mutation_type %in% c("non-targeting") ~ "negative",
+      TRUE ~ NA_character_
+    ),
+    class = factor(class, levels = c("positive", "negative")) # order matters for yardstick
+  ) %>%
+  filter(!is.na(class))
+
+df <- df %>% mutate(score = L2FC_A427_PE_SYN_RMC6236_average_zscore)
+
+# n counts per group
+n_counts <- df %>% count(class)
+n_pos <- n_counts %>% filter(class == "positive") %>% pull(n)
+n_neg <- n_counts %>% filter(class == "negative") %>% pull(n)
+
+roc_data <- df %>%
+  roc_curve(truth = class, score, event_level = "first")
+
+auc_val <- df %>%
+  roc_auc(truth = class, score, event_level = "first")
+
+auc_val
+
+annotation_label <- paste0(
+  "AUROC = ", round(auc_val$.estimate, 3), "\n",
+  "n(missense) = ", n_pos, "\n",
+  "n(non-targeting) = ", n_neg
+)
+
+ggplot(roc_data, aes(x = 1 - specificity, y = sensitivity)) +
+  geom_path(color = "salmon", linewidth = 0.5) +
+  geom_abline(lty = 3, color = "gray50") +
+  annotate(
+    "text",
+    x = 0.6, y = 0.4,
+    label = annotation_label,
+    hjust = 0, vjust = 0,
+    size = 3.5
+  ) +
+  coord_equal() +
+  labs(
+    title = "ROC: \nKRAS 64/71 missense vs. non-targeting pegRNAs",
+    x = "1 - specificity (FPR)",
+    y = "sensitivity (TPR)"
+  ) +
+  theme_minimal() +
+    theme(plot.title = element_text(size = 11.5))
+ggsave("ROC3.eps", width = 4.5, height = 4.5, path ="./figures_export")
+```
+```{r}
+#RESISTANCE - PRC versus NT
+df <- synprime_df %>%
+  mutate(
+    class = case_when(
+      mutation_type == "missense" & Gene == "KRAS" &  AA.number %in% c("71", "64") ~ "positive",
+      mutation_type %in% c("non-targeting") ~ "negative",
+      TRUE ~ NA_character_
+    ),
+    class = factor(class, levels = c("positive", "negative")) # order matters for yardstick
+  ) %>%
+  filter(!is.na(class))
+df <- df %>% mutate(score = L2FC_A427_PE_SYN_RMC6236_average_zscore)
+
+# n counts per group
+n_counts <- df %>% count(class)
+n_pos <- n_counts %>% filter(class == "positive") %>% pull(n)
+n_neg <- n_counts %>% filter(class == "negative") %>% pull(n)
+
+pr_data <- df %>%
+  pr_curve(truth = class, score, event_level = "first")
+pr_auc_val <- df %>%
+  pr_auc(truth = class, score, event_level = "first")
+pr_auc_val
+
+baseline_precision <- n_pos / (n_pos + n_neg)
+
+annotation_label <- paste0(
+  "AUPRC = ", round(pr_auc_val$.estimate, 3), "\n",
+  "n(missense) = ", n_pos, "\n",
+  "n(non-targeting) = ", n_neg
+)
+
+ggplot(pr_data, aes(x = recall, y = precision)) +
+  geom_path(color = "steelblue", linewidth = 0.5) +
+  #geom_hline(yintercept = baseline_precision, lty = 3, color = "gray50") +
+  annotate(
+    "text",
+    x = 0.2, y = 0.4,
+    label = annotation_label,
+    hjust = 0, vjust = 0,
+    size = 3.5
+  ) +
+    scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  coord_equal() +
+  labs(
+    title = "PRC: \nKRAS 64/71 missense vs. non-targeting pegRNAs",
+    x = "recall (sensitivity)",
+    y = "precision (PPV)"
+  ) +
+  theme_minimal() +
+    theme(plot.title = element_text(size = 11.5))
+ggsave("PRC3.eps", width = 4.5, height = 4.5, path ="./figures_export")
+```
+
+```{r}
+#RESISTANCE - ROC versus synonymous
+df <- synprime_df %>%
+  mutate(
+    class = case_when(
+      mutation_type == "missense" & Gene == "KRAS" &  AA.number %in% c("71", "64") ~ "positive",
+      mutation_type %in% c("synonymous") ~ "negative",
+      TRUE ~ NA_character_
+    ),
+    class = factor(class, levels = c("positive", "negative")) # order matters for yardstick
+  ) %>%
+  filter(!is.na(class))
+
+df <- df %>% mutate(score = L2FC_A427_PE_SYN_RMC6236_average_zscore)
+
+# n counts per group
+n_counts <- df %>% count(class)
+n_pos <- n_counts %>% filter(class == "positive") %>% pull(n)
+n_neg <- n_counts %>% filter(class == "negative") %>% pull(n)
+
+roc_data <- df %>%
+  roc_curve(truth = class, score, event_level = "first")
+
+auc_val <- df %>%
+  roc_auc(truth = class, score, event_level = "first")
+
+auc_val
+
+annotation_label <- paste0(
+  "AUROC = ", round(auc_val$.estimate, 3), "\n",
+  "n(missense) = ", n_pos, "\n",
+  "n(synonymous) = ", n_neg
+)
+
+ggplot(roc_data, aes(x = 1 - specificity, y = sensitivity)) +
+  geom_path(color = "salmon", linewidth = 0.5) +
+  geom_abline(lty = 3, color = "gray50") +
+  annotate(
+    "text",
+    x = 0.6, y = 0.4,
+    label = annotation_label,
+    hjust = 0, vjust = 0,
+    size = 3.5
+  ) +
+  coord_equal() +
+  labs(
+    title = "ROC: \nKRAS 64/71 missense vs. synonymous pegRNAs",
+    x = "1 - specificity (FPR)",
+    y = "sensitivity (TPR)"
+  ) +
+  theme_minimal() +
+    theme(plot.title = element_text(size = 11.5))
+ggsave("ROC4.eps", width = 4.5, height = 4.5, path ="./figures_export")
+```
+```{r}
+#RESISTANCE - PRC versus synonymous
+df <- synprime_df %>%
+  mutate(
+    class = case_when(
+      mutation_type == "missense" & Gene == "KRAS" &  AA.number %in% c("71", "64") ~ "positive",
+      mutation_type %in% c("synonymous") ~ "negative",
+      TRUE ~ NA_character_
+    ),
+    class = factor(class, levels = c("positive", "negative")) # order matters for yardstick
+  ) %>%
+  filter(!is.na(class))
+df <- df %>% mutate(score = L2FC_A427_PE_SYN_RMC6236_average_zscore)
+
+# n counts per group
+n_counts <- df %>% count(class)
+n_pos <- n_counts %>% filter(class == "positive") %>% pull(n)
+n_neg <- n_counts %>% filter(class == "negative") %>% pull(n)
+
+pr_data <- df %>%
+  pr_curve(truth = class, score, event_level = "first")
+pr_auc_val <- df %>%
+  pr_auc(truth = class, score, event_level = "first")
+pr_auc_val
+
+baseline_precision <- n_pos / (n_pos + n_neg)
+
+annotation_label <- paste0(
+  "AUPRC = ", round(pr_auc_val$.estimate, 3), "\n",
+  "n(missense) = ", n_pos, "\n",
+  "n(synonymous) = ", n_neg
+)
+
+df %>%
+  filter(class == "positive") %>%
+  select(Mutation)
+
+ggplot(pr_data, aes(x = recall, y = precision)) +
+  geom_path(color = "steelblue", linewidth = 0.5) +
+  geom_hline(yintercept = baseline_precision, lty = 3, color = "gray50") +
+  annotate(
+    "text",
+    x = 0.2, y = 0.4,
+    label = annotation_label,
+    hjust = 0, vjust = 0,
+    size = 3.5
+  ) +
+  coord_equal() +
+  labs(
+    title = "PRC: \nKRAS 64/71 missense vs. synonymous pegRNAs",
+    x = "recall (sensitivity)",
+    y = "precision (PPV)"
+  ) +
+  theme_minimal() +
+    theme(plot.title = element_text(size = 11.5))
+ggsave("PRC4.eps", width = 4.5, height = 4.5, path ="./figures_export")
+```
+
+```{r}
+#RESISTANCE - ROC versus synonymous
+df <- synprime_df %>%
+  mutate(
+    class = case_when(
+      mutation_type == "missense" & Gene == "KRAS" &  AA.number == 12 ~ "positive",
+      mutation_type %in% c("synonymous") ~ "negative",
+      TRUE ~ NA_character_
+    ),
+    class = factor(class, levels = c("positive", "negative")) # order matters for yardstick
+  ) %>%
+  filter(!is.na(class))
+
+df <- df %>% mutate(score = L2FC_A427_PE_SYN_MRTX1133_average_zscore)
+
+# n counts per group
+n_counts <- df %>% count(class)
+n_pos <- n_counts %>% filter(class == "positive") %>% pull(n)
+n_neg <- n_counts %>% filter(class == "negative") %>% pull(n)
+
+roc_data <- df %>%
+  roc_curve(truth = class, score, event_level = "first")
+
+auc_val <- df %>%
+  roc_auc(truth = class, score, event_level = "first")
+
+auc_val
+
+annotation_label <- paste0(
+  "AUROC = ", round(auc_val$.estimate, 3), "\n",
+  "n(missense) = ", n_pos, "\n",
+  "n(synonymous) = ", n_neg
+)
+
+ggplot(roc_data, aes(x = 1 - specificity, y = sensitivity)) +
+  geom_path(color = "salmon", linewidth = 0.5) +
+  geom_abline(lty = 3, color = "gray50") +
+  annotate(
+    "text",
+    x = 0.6, y = 0.4,
+    label = annotation_label,
+    hjust = 0, vjust = 0,
+    size = 3.5
+  ) +
+  coord_equal() +
+  labs(
+    title = "ROC: \nKRAS G12 missense vs. synonymous pegRNAs",
+    x = "1 - specificity (FPR)",
+    y = "sensitivity (TPR)"
+  ) +
+  theme_minimal() +
+    theme(plot.title = element_text(size = 11.5))
+ggsave("ROC5.eps", width = 4.5, height = 4.5, path ="./figures_export")
+```
+
+```{r}
+#RESISTANCE - PRC versus synonymous
+df <- synprime_df %>%
+  mutate(
+    class = case_when(
+      mutation_type == "missense" & Gene == "KRAS" &  AA.number == 12 ~ "positive",
+      mutation_type %in% c("synonymous") ~ "negative",
+      TRUE ~ NA_character_
+    ),
+    class = factor(class, levels = c("positive", "negative")) # order matters for yardstick
+  ) %>%
+  filter(!is.na(class))
+df <- df %>% mutate(score = L2FC_A427_PE_SYN_MRTX1133_average_zscore)
+
+# n counts per group
+n_counts <- df %>% count(class)
+n_pos <- n_counts %>% filter(class == "positive") %>% pull(n)
+n_neg <- n_counts %>% filter(class == "negative") %>% pull(n)
+
+pr_data <- df %>%
+  pr_curve(truth = class, score, event_level = "first")
+pr_auc_val <- df %>%
+  pr_auc(truth = class, score, event_level = "first")
+pr_auc_val
+
+baseline_precision <- n_pos / (n_pos + n_neg)
+
+annotation_label <- paste0(
+  "AUPRC = ", round(pr_auc_val$.estimate, 3), "\n",
+  "n(missense) = ", n_pos, "\n",
+  "n(synonymous) = ", n_neg
+)
+
+ggplot(pr_data, aes(x = recall, y = precision)) +
+  geom_path(color = "steelblue", linewidth = 0.5) +
+  geom_hline(yintercept = baseline_precision, lty = 3, color = "gray50") +
+  annotate(
+    "text",
+    x = 0.2, y = 0.4,
+    label = annotation_label,
+    hjust = 0, vjust = 0,
+    size = 3.5
+  ) +
+  coord_equal() +
+  labs(
+    title = "PRC: \nKRAS G12 missense vs. synonymous pegRNAs",
+    x = "recall (sensitivity)",
+    y = "precision (PPV)"
+  ) +
+  theme_minimal() +
+    theme(plot.title = element_text(size = 11.5))
+ggsave("PRC5.eps", width = 4.5, height = 4.5, path ="./figures_export")
+```
+
+```{r}
+#RESISTANCE - ROC versus non-targeting
+df <- synprime_df %>%
+  mutate(
+    class = case_when(
+      mutation_type == "missense" & Gene == "KRAS" &  AA.number == 12 ~ "positive",
+      mutation_type %in% c("non-targeting") ~ "negative",
+      TRUE ~ NA_character_
+    ),
+    class = factor(class, levels = c("positive", "negative")) # order matters for yardstick
+  ) %>%
+  filter(!is.na(class))
+
+df <- df %>% mutate(score = L2FC_A427_PE_SYN_MRTX1133_average_zscore)
+
+# n counts per group
+n_counts <- df %>% count(class)
+n_pos <- n_counts %>% filter(class == "positive") %>% pull(n)
+n_neg <- n_counts %>% filter(class == "negative") %>% pull(n)
+
+roc_data <- df %>%
+  roc_curve(truth = class, score, event_level = "first")
+
+auc_val <- df %>%
+  roc_auc(truth = class, score, event_level = "first")
+
+auc_val
+
+annotation_label <- paste0(
+  "AUROC = ", round(auc_val$.estimate, 3), "\n",
+  "n(missense) = ", n_pos, "\n",
+  "n(non-targeting) = ", n_neg
+)
+
+ggplot(roc_data, aes(x = 1 - specificity, y = sensitivity)) +
+  geom_path(color = "salmon", linewidth = 0.5) +
+  geom_abline(lty = 3, color = "gray50") +
+  annotate(
+    "text",
+    x = 0.6, y = 0.4,
+    label = annotation_label,
+    hjust = 0, vjust = 0,
+    size = 3.5
+  ) +
+  coord_equal() +
+  labs(
+    title = "ROC: \nKRAS G12 missense vs. non-targeting pegRNAs",
+    x = "1 - specificity (FPR)",
+    y = "sensitivity (TPR)"
+  ) +
+  theme_minimal() +
+    theme(plot.title = element_text(size = 11.5))
+ggsave("ROC6.eps", width = 4.5, height = 4.5, path ="./figures_export")
+```
+
+```{r}
+#RESISTANCE - PRC versus non-targeting
+df <- synprime_df %>%
+  mutate(
+    class = case_when(
+      mutation_type == "missense" & Gene == "KRAS" &  AA.number == 12 ~ "positive",
+      mutation_type %in% c("non-targeting") ~ "negative",
+      TRUE ~ NA_character_
+    ),
+    class = factor(class, levels = c("positive", "negative")) # order matters for yardstick
+  ) %>%
+  filter(!is.na(class))
+df <- df %>% mutate(score = L2FC_A427_PE_SYN_MRTX1133_average_zscore)
+
+# n counts per group
+n_counts <- df %>% count(class)
+n_pos <- n_counts %>% filter(class == "positive") %>% pull(n)
+n_neg <- n_counts %>% filter(class == "negative") %>% pull(n)
+
+pr_data <- df %>%
+  pr_curve(truth = class, score, event_level = "first")
+pr_auc_val <- df %>%
+  pr_auc(truth = class, score, event_level = "first")
+pr_auc_val
+
+baseline_precision <- n_pos / (n_pos + n_neg)
+
+annotation_label <- paste0(
+  "AUPRC = ", round(pr_auc_val$.estimate, 3), "\n",
+  "n(missense) = ", n_pos, "\n",
+  "n(non-targeting) = ", n_neg
+)
+
+ggplot(pr_data, aes(x = recall, y = precision)) +
+  geom_path(color = "steelblue", linewidth = 0.5) +
+  #geom_hline(yintercept = baseline_precision, lty = 3, color = "gray50") +
+  annotate(
+    "text",
+    x = 0.2, y = 0.4,
+    label = annotation_label,
+    hjust = 0, vjust = 0,
+    size = 3.5
+  ) +
+      scale_y_continuous(limits = c(0, 1), expand = c(0, 0)) +
+  coord_equal() +
+  labs(
+    title = "PRC: \nKRAS G12 missense vs. non-targeting pegRNAs",
+    x = "recall (sensitivity)",
+    y = "precision (PPV)"
+  ) +
+  theme_minimal() +
+    theme(plot.title = element_text(size = 11.5))
+ggsave("PRC6.eps", width = 4.5, height = 4.5, path ="./figures_export")
+```
+
+```{r}
+#plot control versus the drug
+plot1 <- ggplot(synprime_df, aes(x=L2FC_A427_PE_SYN_Control_average_zscore, y = L2FC_A427_PE_SYN_BI2865_average_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427_PE_SYN_Control_average_zscore") +
+  ylab("L2FC_A427_PE_SYN_BI2865_average_zscore") +
+  #annotate("text", y = 1, x = -2, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) +
+  geom_text_repel(aes(label=ifelse(L2FC_A427_PE_SYN_BI2865_average_zscore >3 & L2FC_A427_PE_SYN_Control_average_zscore < -2 | L2FC_A427_PE_SYN_BI2865_average_zscore >0 & L2FC_A427_PE_SYN_Control_average_zscore < -4 | L2FC_A427_PE_SYN_BI2865_average_zscore > 3, paste(Mutation), "")), size=2, max.overlaps = max_overalps, segment.size = 0.2)
+plot1
+#ggsave("valid_reps_control_PC9.eps", width = 4, height = 4, path ="./figures_export")
+
+plot2 <- ggplot(synprime_df, aes(x=L2FC_A427_PE_SYN_Control_average_zscore, y = L2FC_A427_PE_SYN_MRTX1133_average_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427_PE_SYN_Control_average_zscore") +
+  ylab("L2FC_A427_PE_SYN_MRTX1133_average_zscore") +
+  #annotate("text", y = 1, x = -2, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) +
+  geom_text_repel(aes(label=ifelse(L2FC_A427_PE_SYN_MRTX1133_average_zscore >3 & L2FC_A427_PE_SYN_Control_average_zscore < -2 | L2FC_A427_PE_SYN_MRTX1133_average_zscore > 3, paste(Mutation), "")), size=2, max.overlaps = max_overalps, segment.size = 0.2)
+plot2
+#ggsave("valid_reps_control_PC9.eps", width = 4, height = 4, path ="./figures_export")
+
+plot3 <- ggplot(synprime_df, aes(x=L2FC_A427_PE_SYN_Control_average_zscore, y = L2FC_A427_PE_SYN_RMC6236_average_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427_PE_SYN_Control_average_zscore") +
+  ylab("L2FC_A427_PE_SYN_RMC6236_average_zscore") +
+  #annotate("text", y = 1, x = -2, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) +
+  geom_text_repel(aes(label=ifelse(L2FC_A427_PE_SYN_RMC6236_average_zscore >3 & L2FC_A427_PE_SYN_Control_average_zscore < -2 | L2FC_A427_PE_SYN_RMC6236_average_zscore < -2 & L2FC_A427_PE_SYN_Control_average_zscore > 1 | L2FC_A427_PE_SYN_RMC6236_average_zscore > 3, paste(Mutation), "")), size=2, max.overlaps = max_overalps, segment.size = 0.2)
+plot3
+#ggsave("valid_reps_control_PC9.eps", width = 4, height = 4, path ="./figures_export")
+
+plot4 <- ggplot(synprime_df, aes(x=L2FC_A427_PE_SYN_Control_average_zscore, y = L2FC_A427_PE_SYN_ACBI3_average_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("control versus T0 (z-score)") +
+  ylab("ACBI3 versus T0 (z-score)") +
+  #annotate("text", y = 1, x = -2, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) +
+  geom_text_repel(aes(label=ifelse(L2FC_A427_PE_SYN_ACBI3_average_zscore >3 & L2FC_A427_PE_SYN_Control_average_zscore < -2 | L2FC_A427_PE_SYN_ACBI3_average_zscore >0 & L2FC_A427_PE_SYN_Control_average_zscore < -4 | L2FC_A427_PE_SYN_ACBI3_average_zscore > 3, paste(Mutation), "")), size=2, max.overlaps = max_overalps, segment.size = 0.2)
+plot4
+ggsave("ACBI3_drug_addiction.eps", width = 4, height = 4, path ="./figures_export")
+```
+
+```{r}
+#plot drug versus the drug
+plot1 <- ggplot(synprime_df, aes(x=L2FC_A427_PE_SYN_MRTX1133_average_zscore, y = L2FC_A427_PE_SYN_BI2865_average_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427_PE_SYN_MRTX1133_average_zscore") +
+  ylab("L2FC_A427_PE_SYN_BI2865_average_zscore") +
+  #annotate("text", y = 1, x = -2, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) +
+  geom_text_repel(aes(label=ifelse(L2FC_A427_PE_SYN_BI2865_average_zscore >3 | L2FC_A427_PE_SYN_MRTX1133_average_zscore > 3, paste(Mutation), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot1
+#ggsave("valid_reps_control_PC9.eps", width = 4, height = 4, path ="./figures_export")
+
+plot2 <- ggplot(synprime_df, aes(x=L2FC_A427_PE_SYN_RMC6236_average_zscore, y = L2FC_A427_PE_SYN_MRTX1133_average_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427_PE_SYN_RMC6236_average_zscore") +
+  ylab("L2FC_A427_PE_SYN_MRTX1133_average_zscore") +
+  #annotate("text", y = 1, x = -2, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) +
+  geom_text_repel(aes(label=ifelse(L2FC_A427_PE_SYN_RMC6236_average_zscore >3 | L2FC_A427_PE_SYN_MRTX1133_average_zscore > 3, paste(Mutation), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot2
+#ggsave("valid_reps_control_PC9.eps", width = 4, height = 4, path ="./figures_export")
+
+plot3 <- ggplot(synprime_df, aes(x=L2FC_A427_PE_SYN_RMC6236_average_zscore, y = L2FC_A427_PE_SYN_ACBI3_average_zscore, colour = mutation_type)) +
+geom_point(size = 0.4, position = pos, show.legend = FALSE) +
+theme_classic() +
+   scale_color_manual(values =c("black", "grey75", "red3", "purple"))+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("RMC-6236 versus T0 (z-score)") +
+  ylab("ACBI3 versus T0 (z-score)") +
+  #annotate("text", y = 1, x = -2, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) +
+  geom_text_repel(aes(label=ifelse(L2FC_A427_PE_SYN_RMC6236_average_zscore > 4 | L2FC_A427_PE_SYN_ACBI3_average_zscore > 4, paste(Mutation), "")), size=2, max.overlaps = Inf, segment.size = 0.2, show.legend = FALSE)
+plot3
+ggsave("ACBI3_versus_RMC.eps", width = 4, height = 4, path ="./figures_export")
+
+plot4 <- ggplot(synprime_df, aes(x=L2FC_A427_PE_SYN_MRTX1133_average_zscore, y = L2FC_A427_PE_SYN_ACBI3_average_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427_PE_SYN_MRTX1133_average_zscore") +
+  ylab("L2FC_A427_PE_SYN_ACBI3_average_zscore") +
+  #annotate("text", y = 1, x = -2, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) +
+  geom_text_repel(aes(label=ifelse(L2FC_A427_PE_SYN_MRTX1133_average_zscore >3 | L2FC_A427_PE_SYN_ACBI3_average_zscore > 3, paste(Mutation), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot4
+#ggsave("valid_reps_control_PC9.eps", width = 4, height = 4, path ="./figures_export")
+
+plot5 <- ggplot(synprime_df, aes(x=L2FC_A427_PE_SYN_BI2865_average_zscore, y = L2FC_A427_PE_SYN_ACBI3_average_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427_PE_SYN_BI2865_average_zscore") +
+  ylab("L2FC_A427_PE_SYN_ACBI3_average_zscore") +
+  #annotate("text", y = 1, x = -2, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) +
+  geom_text_repel(aes(label=ifelse(L2FC_A427_PE_SYN_ACBI3_average_zscore >3 |  L2FC_A427_PE_SYN_BI2865_average_zscore > 3, paste(Mutation), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot5
+#ggsave("valid_reps_control_PC9.eps", width = 4, height = 4, path ="./figures_export")
+
+plot6 <- ggplot(synprime_df, aes(x=L2FC_A427_PE_SYN_BI2865_average_zscore, y = L2FC_A427_PE_SYN_RMC6236_average_zscore)) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_smooth(method = lm, colour = "salmon2")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("L2FC_A427_PE_SYN_BI2865_average_zscore") +
+  ylab("L2FC_A427_PE_SYN_RMC6236_average_zscore") +
+  #annotate("text", y = 1, x = -2, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) +
+  geom_text_repel(aes(label=ifelse(L2FC_A427_PE_SYN_RMC6236_average_zscore >3 |  L2FC_A427_PE_SYN_BI2865_average_zscore > 3, paste(Mutation), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot6
+#ggsave("valid_reps_control_PC9.eps", width = 4, height = 4, path ="./figures_export")
+```
+
+```{r}
+#label highest z-score per variant
+scores <- 
+  synprime_df %>%
+  group_by(Mutation) %>%
+  mutate(label = ifelse(L2FC_A427_PE_SYN_RMC6236_average_zscore == max(L2FC_A427_PE_SYN_RMC6236_average_zscore) & L2FC_A427_PE_SYN_RMC6236_average_zscore > 3.5 | L2FC_A427_PE_SYN_ACBI3_average_zscore == max(L2FC_A427_PE_SYN_ACBI3_average_zscore) & L2FC_A427_PE_SYN_ACBI3_average_zscore > 3.5,
+                        as.character(Mutation), NA_character_)) %>%
+  ungroup()
+
+
+plot3 <- ggplot(scores, aes(x=L2FC_A427_PE_SYN_RMC6236_average_zscore, y = L2FC_A427_PE_SYN_ACBI3_average_zscore, colour = mutation_type)) +
+geom_point(size = 0.4, position = pos, show.legend = FALSE) +
+theme_classic() +
+   scale_color_manual(values =c("black", "grey75", "red3", "purple"))+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("RMC-6236 versus T0 (z-score)") +
+  ylab("ACBI3 versus T0 (z-score)") +
+  geom_text_repel(aes(label = label),
+   size=2, max.overlaps = Inf, segment.size = 0.2, show.legend = FALSE)
+plot3
+ggsave("ACBI3_versus_RMC.eps", width = 3.4, height = 3.25, path ="./figures_export")
+```
+
+```{r}
+#plot versus aa position in KRAS
+plot1 <- ggplot(synprime_df, aes(x=AA.number, y = L2FC_A427_PE_SYN_Control_average_zscore )) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  xlab("AA.number") +
+  ylab("L2FC_A427_PE_SYN_Control_average_zscore") 
+  #annotate("text", y = 1, x = -2, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) +
+  #geom_text_repel(aes(label=ifelse(L2FC_A427_PE_SYN_Control_average_zscore  < -3, paste(Mutation), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot1
+#ggsave("valid_reps_control_PC9.eps", width = 4, height = 4, path ="./figures_export")
+
+plot2 <- ggplot(synprime_df, aes(x=AA.number, y = L2FC_A427_PE_SYN_RMC6236_average_zscore )) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  xlab("AA.number") +
+  ylab("L2FC_A427_PE_SYN_RMC6236_average_zscore") +
+  #annotate("text", y = 1, x = -2, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) +
+  geom_text_repel(aes(label=ifelse(L2FC_A427_PE_SYN_RMC6236_average_zscore >3, paste(Mutation), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot2
+#ggsave("valid_reps_control_PC9.eps", width = 4, height = 4, path ="./figures_export")
+
+plot3 <- ggplot(synprime_df, aes(x=AA.number, y = L2FC_A427_PE_SYN_ACBI3_average_zscore )) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  xlab("AA.number") +
+  ylab("L2FC_A427_PE_SYN_ACBI3_average_zscore") +
+  #annotate("text", y = 1, x = -2, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) +
+  geom_text_repel(aes(label=ifelse(L2FC_A427_PE_SYN_ACBI3_average_zscore >3, paste(Mutation), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot3
+#ggsave("valid_reps_control_PC9.eps", width = 4, height = 4, path ="./figures_export")
+
+plot4 <- ggplot(synprime_df, aes(x=AA.number, y = L2FC_A427_PE_SYN_MRTX1133_average_zscore )) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  xlab("AA.number") +
+  ylab("L2FC_A427_PE_SYN_MRTX1133_average_zscore") +
+  #annotate("text", y = 1, x = -2, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) +
+  geom_text_repel(aes(label=ifelse(L2FC_A427_PE_SYN_MRTX1133_average_zscore >3, paste(Mutation), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot4
+#ggsave("valid_reps_control_PC9.eps", width = 4, height = 4, path ="./figures_export")
+
+plot5 <- ggplot(synprime_df, aes(x=AA.number, y = L2FC_A427_PE_SYN_BI2865_average_zscore )) +
+geom_point(colour = "grey60", size = 0.4, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  xlab("AA.number") +
+  ylab("L2FC_A427_PE_SYN_MRTX1133_average_zscore") +
+  #annotate("text", y = 1, x = -2, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) +
+  geom_text_repel(aes(label=ifelse(L2FC_A427_PE_SYN_BI2865_average_zscore >3, paste(Mutation), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot5
+#ggsave("valid_reps_control_PC9.eps", width = 4, height = 4, path ="./figures_export")
+
+plot6 <- ggplot(synprime_df, aes(x=AA.number, y = L2FC_A427_PE_SYN_Control_average_zscore, shape = mutation_type )) +
+geom_pointdensity(size = 2, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  xlab("AA.number") +
+  ylab("L2FC_A427_PE_SYN_Control_average_zscore") 
+  #annotate("text", y = 1, x = -2, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) +
+  #geom_text_repel(aes(label=ifelse(L2FC_A427_PE_SYN_Control_average_zscore  < -3, paste(Mutation), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot6
+#ggsave("valid_reps_control_PC9.eps", width = 4, height = 4, path ="./figures_export")
+
+plot7 <- ggplot(subset(synprime_df, mutation_type %in% c("nonsense", "synonymous")), aes(x=AA.number, y = L2FC_A427_PE_SYN_Control_average_zscore, colour = mutation_type )) +
+geom_point(size = 2, position = pos) +
+theme_classic() +
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  xlab("AA.number") +
+  ylab("L2FC_A427_PE_SYN_Control_average_zscore") 
+  #annotate("text", y = 1, x = -2, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) +
+  #geom_text_repel(aes(label=ifelse(L2FC_A427_PE_SYN_Control_average_zscore  < -3, paste(Mutation), "")), size=2, max.overlaps = Inf, segment.size = 0.2)
+plot7
+```
+
+```{r}
+#make a dot plot graph of resistance mutations - put data into long format - reshape
+df_long_zscore <- 
+  synprime_df %>%
+  select(id, Gene, AA.number, Name, Mutation, mutation_type, L2FC_A427_PE_SYN_Control_average_zscore, L2FC_A427_PE_SYN_BI2865_average_zscore, L2FC_A427_PE_SYN_ACBI3_average_zscore, L2FC_A427_PE_SYN_RMC6236_average_zscore, L2FC_A427_PE_SYN_MRTX1133_average_zscore) %>%
+  pivot_longer(!c(id, Gene, AA.number, Name, Mutation, mutation_type), names_to = "drug", values_to = "z_score") %>%
+  distinct()
+
+#rename columns to join to sensor data
+df_long_zscore <-
+  df_long_zscore %>%
+  mutate(drug = ifelse(str_detect(drug, "_Control_"), "control", drug)) %>%
+    mutate(drug = ifelse(str_detect(drug, "_BI2865_"), "BI-2865", drug)) %>%
+  mutate(drug = ifelse(str_detect(drug, "_MRTX1133_"), "MRTX1133", drug)) %>%
+  mutate(drug = ifelse(str_detect(drug, "_RMC6236_"), "RMC-6236", drug)) %>%
+  mutate(drug = ifelse(str_detect(drug, "_ACBI3_"), "ACBI3", drug))
+```
+
+```{r}
+#rename the reshaped data for join
+df_long <- 
+  df_long_zscore %>%
+  rename(synprime_id = id) %>%
+  rename(gene = Gene) %>%
+  rename(amino_acid_position = AA.number) %>%
+    rename(mutation = Mutation) %>%
+  mutate(mutation = str_remove_all(mutation, ":")) %>%
+  mutate(mutation = str_remove_all(mutation, "mut1")) %>%
+    mutate(mutation = str_remove_all(mutation, "mut2")) %>%
+    mutate(mutation = str_remove_all(mutation, "mut3")) %>%
+    mutate(mutation = str_remove_all(mutation, "mut4")) %>%
+    mutate(mutation = str_remove_all(mutation, "mut5")) %>%
+  mutate(mutation_id = paste(gene, mutation, synprime_id)) %>%
+  distinct()
+  
+df_long
+```
+
+```{r}
+#heatmap KRAS - Plot KRAS only
+plot1 <- 
+  ggplot(df_long, aes(x = mutation, y = drug, fill = z_score)) +
+  geom_tile() +
+  xlab("") + ylab("") +
+    scale_x_discrete( expand = c(0, 0)) +  # <-- show mutation text
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, name = "z-score") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+plot1
+```
+
+```{r}
+#focused heatmap on hits
+df_long <-
+  df_long %>%
+    rename(zscore_synprime = z_score)
+
+plot_df <-
+  df_long %>%
+  filter(zscore_synprime > 3 | zscore_synprime < -2) %>%
+  select(amino_acid_position)
+
+plot1 <- 
+  ggplot(subset(df_long, amino_acid_position %in% c(plot_df$amino_acid_position)), aes(x = mutation, y = drug, fill = zscore_synprime)) +
+  geom_tile() +
+  xlab("") + ylab("") +
+    scale_x_discrete( expand = c(0, 0)) +  # <-- show mutation text
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", midpoint = 0, name = "z-score") +
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1))
+plot1
+#ggsave("Fig3_dots_1.eps", width = 17.5, height = 4.5, path ="./figures_export")
+```
+```{r}
+#KRAS Y64 pegRNAs for validation
+df_long %>% 
+  arrange(desc(zscore_synprime)) %>%
+  filter(amino_acid_position == "64")
+```
+
+```{r}
+#read in the MAGeCK scores
+MAGeCK <- as_tibble(read.csv("MAGeCK_100626.csv", stringsAsFactors = FALSE, header = TRUE))
+```
+
+```{r}
+#left join MAGeCK scores to table
+MAGeCK <-
+MAGeCK %>%
+  select(sgrna, Gene, FDR, LFC, p.low, p.high, Sample) %>%
+  rename(synprime_id = sgrna, gene = Gene, LFC_MAGeCK = LFC) %>%
+  mutate(p_value = ifelse(LFC_MAGeCK <0, p.low, 
+                          ifelse(LFC_MAGeCK >0, p.high,
+                                 ""))) 
+
+#rename the Sample to give the drug column
+MAGeCK <-
+MAGeCK %>%
+  filter(Sample %in% c("A427_PE_Ctrl", "A427_PE_BI", "A427_PE_ACBI3", "A427_PE_MRTX", "A427_PE_RMC")) %>%
+  mutate(drug = ifelse(Sample == "A427_PE_Ctrl", "control",
+                       ifelse(Sample == "A427_PE_BI", "BI-2865",
+                              ifelse(Sample == "A427_PE_ACBI3", "ACBI3",
+                                      ifelse(Sample == "A427_PE_MRTX", "MRTX1133",
+                                             ifelse(Sample == "A427_PE_RMC", "RMC-6236",
+                                    "")))))) %>%
+  select(-Sample, -p.low, -p.high, -gene) %>%
+  distinct()
+
+df_long <-
+left_join(df_long, MAGeCK)
+```
+
+```{r}
+#write a supplementary table
+df_long %>%
+  write.csv("KRAS_synprime_supplementary_table.csv", row.names = FALSE)
+```
+
+```{r}
+#make p_value numeric
+df_long <-
+df_long %>%
+  mutate(p_value = as.numeric(p_value))
+
+#LFC versus z-score 
+plot1 <- ggplot(df_long, aes(x = LFC_MAGeCK, y = zscore_synprime, colour = FDR, size = p_value)) +
+geom_point(show.legend = FALSE) +
+    geom_hline(yintercept=c(0),linetype="dotted") +
+theme_classic() +
+  xlab("LFC_MAGeCK") +
+  ylab("zscore_synprime")+
+  facet_wrap(~drug)
+plot1
+
+plot2 <- ggplot(df_long, aes(x = FDR, y = zscore_synprime, colour = p_value)) +
+geom_point(show.legend = FALSE) +
+    geom_hline(yintercept=c(0),linetype="dotted") +
+theme_classic() +
+  xlab("FDR") +
+  ylab("zscore_synprime")+
+  facet_wrap(~drug)
+plot2
+
+plot3 <- ggplot(df_long, aes(x = p_value, y = zscore_synprime, colour = FDR)) +
+geom_point(show.legend = FALSE) +
+    geom_hline(yintercept=c(0),linetype="dotted") +
+theme_classic() +
+  xlab("p_value") +
+  ylab("zscore_synprime")+
+  facet_wrap(~drug)
+plot3
+```
+
+```{r}
+#KRAS secondary structure annotation
+KRAS_structure <- as_tibble(read.csv("KRAS_secondary_structure.csv", stringsAsFactors = FALSE, header = TRUE))
+
+#join
+KRAS_structure <-
+  left_join(KRAS_structure, df_long)
+```
+
+```{r}
+#label highest z-score per variant
+KRAS_structure <- 
+  KRAS_structure %>%
+  group_by(mutation, drug) %>%
+  mutate(label = ifelse(zscore_synprime == max(zscore_synprime) & zscore_synprime > 5,
+                        as.character(mutation), NA_character_)) %>%
+  ungroup()
+
+domain_labels <- KRAS_structure %>%
+  group_by(domain) %>%
+  summarise(x_mid = mean(range(amino_acid_position)), .groups = "drop")
+
+KRAS_structure <-
+  KRAS_structure %>%
+  mutate(drug = factor(drug, levels = c("control", "RMC-6236",  "MRTX1133", "BI-2865","ACBI3"))) %>%
+  arrange(drug) %>%
+  distinct()
+
+#plot all KRAS data with domain information
+plot1 <- ggplot(KRAS_structure, aes(x = amino_acid_position, y = zscore_synprime, colour = drug)) +
+geom_point(size = 0.5, position = pos, show.legend = FALSE) +
+    geom_hline(yintercept=c(0),linetype="dotted") +
+        geom_tile(aes(y = -9, fill = domain, colour = NULL), height = 0.70, show.legend = FALSE) +
+  geom_text(data = domain_labels,
+            aes(x = x_mid, y = -9.8, label = domain),
+            colour = "black", size = 2.75,
+            inherit.aes = FALSE) +
+theme_classic() +
+  xlab("KRAS amino acid position") +
+  ylab("A427-PE versus T0 (z-score)") +
+    scale_fill_manual(values =c("grey75","black", "black", "black", "black"), guide = "none") +
+    scale_colour_manual(values =c("black", "red3", "royalblue2", "springgreen4", "salmon", "grey90")) +
+geom_text_repel(aes(label = label),
+                size = 2, max.overlaps = Inf, segment.size = 0.2, show.legend = FALSE)
+plot1
+ggsave("KRAS_aa_pos.eps", width = 5, height = 3.5, path ="./figures_export")
+```
+
+```{r}
+#hits 
+KRAS_structure %>%
+  filter(zscore_synprime < -3) %>%
+  filter(amino_acid_position >19) %>%
+  filter(amino_acid_position < 74)
+
+KRAS_structure %>%
+  filter(zscore_synprime > 3) %>%
+  select(mutation, drug, zscore_synprime) %>%
+  distinct()
+```
+
+```{r}
+# join sensor data to the new synprime KRAS data
+sensor_data <- as_tibble(read.csv("PE_data_long.csv", stringsAsFactors = FALSE, header = TRUE))
+
+sensor_data <-
+sensor_data %>%
+  rename(mutation_id_sensor = mutation_id) %>%
+    rename(FDR_sensor = FDR) %>%
+      rename(pvalue_sensor = pvalue) %>%
+  rename(zscore_sensor = z_score) %>%
+  mutate(mutation_type = 
+           ifelse(mutation_type == "non_targeting", "non-targeting", 
+                  mutation_type))
+```
+
+```{r}
+sensor_summary <- sensor_data %>%
+  group_by(mutation, drug) %>%
+  summarise(
+    mean_zscore_sensor = mean(zscore_sensor, na.rm = TRUE),
+    n_pegRNA_sensor = n(),
+    .groups = "drop"
+  )
+
+df_long_summary <- df_long %>%
+  group_by(mutation, drug) %>%
+  summarise(
+    mean_zscore_synprime = mean(zscore_synprime, na.rm = TRUE),
+    n_pegRNA_synprime = n(),
+    .groups = "drop"
+  )
+
+#join
+join_data <- 
+  left_join(df_long_summary, sensor_summary)
+
+join_data
+```
+
+```{r}
+#replicate correlation Pearson
+plot_df <-
+  join_data %>%
+  filter(is.na(mean_zscore_synprime) == FALSE) %>%
+    filter(is.na(mean_zscore_sensor) == FALSE)
+
+r100 <- cor(plot_df$mean_zscore_synprime, plot_df$mean_zscore_sensor, method = "pearson")
+cor.test(plot_df$mean_zscore_synprime, plot_df$mean_zscore_sensor, method = "pearson", use="complete.obs")
+
+#correlation between synprime data and sensor data for KRAS
+plot1 <- ggplot(plot_df, aes(x = mean_zscore_synprime, y = mean_zscore_sensor)) +
+geom_pointdensity(size = 0.5, position = pos) +
+theme_classic() +
+    labs(colour = "density") +
+  geom_smooth(method = lm, colour = "grey")+
+  geom_hline(yintercept=c(0),linetype="dotted") +
+  geom_vline(xintercept=c(0),linetype="dotted") +
+  xlab("KRAS-focused PE screen (z-score)") +
+  ylab("sensor PE screen (z-score)") +
+  labs(title = "PE screen correlation - KRAS residues") +
+  annotate("text", y = 4, x = -3.5, label = paste("r =", round(r100, 2)), parse = FALSE, size = 3.5) 
+  #geom_text_repel(aes(label=ifelse(mean_zscore_synprime > 4 &  mean_zscore_sensor >4, paste0(mutation,"-", drug), "")), size=2, max.overlaps = 5, segment.size = 0.2)
+plot1
+ggsave("cross_modality_correlation.eps", width = 5, height = 4, path ="./figures_export")
+```
+
+```{r}
+#enumerate significant synprime hits in KRAS
+plot_df %>% 
+  filter(mean_zscore_synprime > 3) %>%
+  distinct()
+
+#enumerate significant sensor hits in KRAS
+plot_df %>%
+  filter(mean_zscore_sensor > 3) %>%
+  distinct()
+
+#enumerate significant KRAS hits in both screens
+plot_df %>%
+  filter(mean_zscore_synprime > 3 & mean_zscore_sensor > 3) %>%
+  distinct()
+```
+```{r}
+#enumerate number of variants in each library
+
+#symprime dataset
+df_long %>%
+  select(synprime_id, mutation_type, gene) %>%
+  distinct()
+
+#symprime dataset - mutation types - pegRNAs
+df_long %>%
+  select(synprime_id, mutation_type, gene) %>%
+  distinct() %>%
+  count(mutation_type)
+
+#symprime dataset - unique variants
+df_long %>%
+  select(mutation, mutation_type, gene) %>%
+  distinct() %>%
+    count(mutation_type)
+
+#sensor dataset - mutation types - pegRNAs
+sensor_data %>%
+  select(id, mutation_type, gene) %>%
+  distinct() %>%
+  count(mutation_type)
+
+#sensor dataset - unique variants
+sensor_data %>%
+  select(mutation, mutation_type, gene) %>%
+  distinct() %>%
+  count(mutation_type)
+```
