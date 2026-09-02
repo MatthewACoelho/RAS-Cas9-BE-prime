@@ -1,0 +1,855 @@
+---
+title: "A427 drug-tolerant models: bulk RNA-seq differential expression"
+author: "mc32"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: show
+    fig_width: 7
+    fig_height: 5
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo    = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  dpi     = 150
+)
+```
+
+# 0. Libraries
+
+```{r libs}
+# Install once if needed:
+# if (!requireNamespace("BiocManager", quietly = TRUE)) install.packages("BiocManager")
+# BiocManager::install(c("DESeq2", "apeglm", "vsn"))
+# install.packages(c("tidyverse", "pheatmap", "RColorBrewer", "ggrepel", "GGally"))
+
+library(DESeq2)
+library(tidyverse)
+library(pheatmap)
+library(RColorBrewer)
+library(ggrepel)
+```
+
+```{r params}
+# ---- Edit these two paths ----
+count_dir <- "."   # where the .converted_counts.tsv live
+out_dir   <- file.path(count_dir, "DESeq2_results")        # results get written here
+
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+# Thresholds used for calling significance / labelling volcanoes
+PADJ_CUT <- 0.05
+LFC_CUT  <- 1      # i.e. 2-fold
+```
+
+# 1. Build the sample sheet from the filenames
+
+Filenames follow `CellLine_Model_Treatment_Replicate`, e.g. `A427_RMC3_Ctrl_R1`.
+`model` is the cell model (parental or a drug-tolerant derivative), `treatment` is
+the acute drug exposure in that experiment.
+
+```{r sample-sheet}
+files <- list.files(count_dir, pattern = "\\.converted_counts\\.tsv$", full.names = TRUE)
+stopifnot(length(files) > 0)
+
+meta <- tibble(
+  file   = files,
+  sample = sub("\\.converted_counts\\.tsv(\\.gz)?$", "", basename(files))
+) %>%
+  # split the sample name into its four components
+  separate(sample,
+           into   = c("cell_line", "model", "treatment", "replicate"),
+           sep    = "_",
+           remove = FALSE) %>%
+  mutate(
+    # the single factor we actually model: one level per model x treatment cell
+    group  = factor(paste(model, treatment, sep = "_")),
+    model  = factor(model),
+    # flag parental vs drug-tolerant persister-derived line
+    origin = factor(if_else(model == "Par", "Parental", "DTP"))
+  ) %>%
+  arrange(model, treatment, replicate) %>%
+  as.data.frame()
+
+rownames(meta) <- meta$sample
+knitr::kable(meta[, c("sample", "model", "treatment", "replicate", "group")])
+```
+
+```{r sample-sheet-check}
+# Sanity check: every group should have 3 replicates
+table(meta$group)
+```
+
+# 2. Read the count files into a matrix
+
+The files carry a few `##key=value` provenance lines, then a header line that
+starts with `#ensid`. The reader below finds that header line rather than
+hard-coding a `skip=` value, so it still works if the number of `##` lines
+changes between files.
+
+I use the **`count`** column (raw integer counts). Do **not** feed `fpkm`,
+`fpkm_uq` or `tpm` into DESeq2 — it needs untransformed counts and does its own
+size-factor normalisation.
+
+```{r reader}
+read_counts_file <- function(path, value_col = "count") {
+  ln  <- readLines(path)                       # readLines transparently handles .gz
+  hdr <- grep("^#ensid", ln)[1]                # locate the real header row
+  stopifnot(!is.na(hdr))
+
+  tab <- read.delim(
+    text             = paste(ln[hdr:length(ln)], collapse = "\n"),
+    header           = TRUE,
+    check.names      = FALSE,
+    stringsAsFactors = FALSE
+  )
+  colnames(tab)[1] <- sub("^#", "", colnames(tab)[1])   # "#ensid" -> "ensid"
+  tab[, c("ensid", "gene", "biotype", "chr", value_col)]
+}
+
+# Read everything once
+count_list <- lapply(meta$file, read_counts_file)
+names(count_list) <- meta$sample
+```
+
+```{r build-matrix}
+# Gene annotation taken from the first file; all files should share the same rows
+gene_info <- count_list[[1]][, c("ensid", "gene", "biotype", "chr")]
+
+# Match on ensid rather than assuming identical row order across files
+counts_mat <- vapply(
+  count_list,
+  function(x) x$count[match(gene_info$ensid, x$ensid)],
+  numeric(nrow(gene_info))
+)
+rownames(counts_mat) <- gene_info$ensid
+counts_mat <- round(counts_mat)            # DESeq2 requires integers
+storage.mode(counts_mat) <- "integer"
+
+# Guard against silent NA introduction if a file had a different gene set
+stopifnot(!anyNA(counts_mat))
+
+dim(counts_mat)
+counts_mat[1:5, 1:4]
+```
+
+```{r libsize}
+# Library size overview — a quick look for outlier samples
+lib <- tibble(sample = colnames(counts_mat),
+              total  = colSums(counts_mat)) %>%
+  left_join(meta[, c("sample", "model", "treatment")], by = "sample")
+
+ggplot(lib, aes(x = reorder(sample, total), y = total / 1e6, fill = model)) +
+  geom_col() +
+  coord_flip() +
+  labs(x = NULL, y = "Assigned reads (millions)", title = "Library sizes") +
+  theme_bw(base_size = 8)
+```
+
+# 3. DESeq2 object and global QC
+
+For QC (correlation, PCA) I fit one object over all samples. The actual
+statistical contrasts in section 5 are run on **subsets** of two groups at a
+time — see the note there for why.
+
+```{r dds}
+stopifnot(identical(colnames(counts_mat), meta$sample))
+
+dds_all <- DESeqDataSetFromMatrix(
+  countData = counts_mat,
+  colData   = meta,
+  design    = ~ group
+)
+
+# Light pre-filter: keep genes with a decent count in at least a full group
+keep <- rowSums(counts(dds_all) >= 10) >= 3
+table(keep)
+dds_all <- dds_all[keep, ]
+
+# Variance-stabilising transform for all distance/correlation/PCA work
+vsd <- vst(dds_all, blind = TRUE)
+```
+
+## 3.1 Replicate correlation heatmap
+
+Replicates within a group should correlate noticeably better with each other
+than with anything else. Spearman on VST values is fairly robust here.
+
+```{r cor-heatmap, fig.width=11, fig.height=10}
+vsd_mat  <- assay(vsd)
+cor_mat  <- cor(vsd_mat, method = "spearman")
+
+ann <- meta[, c("model", "treatment")]
+
+pheatmap(
+  cor_mat,
+  annotation_col   = ann,
+  annotation_row   = ann,
+  clustering_distance_rows = as.dist(1 - cor_mat),
+  clustering_distance_cols = as.dist(1 - cor_mat),
+  col        = colorRampPalette(rev(brewer.pal(9, "Blues")))(255),
+  fontsize   = 6,
+  main       = "Sample-sample Spearman correlation (VST)"
+)
+```
+
+```{r cor-within}
+# Numeric summary: mean within-group replicate correlation, per group.
+# Anything much below the rest of the table is worth investigating.
+within_cor <- meta %>%
+  group_split(group) %>%
+  map_dfr(function(g) {
+    if (nrow(g) < 2) return(NULL)
+    sub <- cor_mat[g$sample, g$sample]
+    tibble(group    = as.character(g$group[1]),
+           mean_rho = mean(sub[lower.tri(sub)]),
+           min_rho  = min(sub[lower.tri(sub)]))
+  }) %>%
+  arrange(mean_rho)
+
+knitr::kable(within_cor, digits = 4)
+```
+
+## 3.2 Pairwise replicate scatter plots
+
+Useful for eyeballing a single group in detail — swap the group name below.
+
+```{r rep-scatter, fig.width=7, fig.height=7}
+plot_replicate_pairs <- function(group_name, vmat = vsd_mat, md = meta) {
+  s <- md$sample[md$group == group_name]
+  stopifnot(length(s) >= 2)
+  pairs(
+    vmat[, s],
+    pch    = ".",
+    lower.panel = function(x, y, ...) {
+      points(x, y, pch = ".", col = "#00000055")
+      abline(0, 1, col = "red", lty = 2)
+    },
+    upper.panel = function(x, y, ...) {
+      usr <- par("usr"); on.exit(par(usr = usr))
+      par(usr = c(0, 1, 0, 1))
+      text(0.5, 0.5, sprintf("r = %.3f", cor(x, y)), cex = 1.4)
+    },
+    main = paste("Replicates:", group_name)
+  )
+}
+
+plot_replicate_pairs("Par_Ctrl")
+plot_replicate_pairs("Par_RMC")
+plot_replicate_pairs("RMC3_Ctrl")
+plot_replicate_pairs("RMC2_RMC")
+```
+
+## 3.3 PCA
+
+```{r pca, fig.width=8, fig.height=6}
+pca_df <- plotPCA(vsd, intgroup = c("model", "treatment"), returnData = TRUE)
+pv     <- round(100 * attr(pca_df, "percentVar"))
+
+ggplot(pca_df, aes(PC1, PC2, colour = model, shape = treatment)) +
+  geom_point(size = 3, alpha = 0.9) +
+  labs(x = paste0("PC1 (", pv[1], "%)"),
+       y = paste0("PC2 (", pv[2], "%)"),
+       title = "PCA on VST counts") +
+  theme_bw()
+```
+
+# 4. Helper functions: DE and volcano
+
+```{r de-function}
+#' Two-group differential expression with DESeq2
+#'
+#' Subsets to the two groups of interest and re-fits. This keeps dispersion
+#' estimation local to the samples being compared, which matters here because
+#' the panel spans several genetically distinct derivative lines — a single
+#' global fit would inflate dispersion for well-behaved 3-vs-3 comparisons.
+#' (If you prefer the global fit, use results(dds_all, contrast = c("group", b, a)).)
+run_de <- function(group_b, group_a,
+                   cts = counts_mat, md = meta,
+                   min_count = 10, min_samples = 3) {
+
+  sel <- md$sample[md$group %in% c(group_a, group_b)]
+  md_s <- droplevels(md[sel, ])
+  # group_a is the reference/denominator: LFC > 0 means UP in group_b
+  md_s$group <- relevel(factor(md_s$group), ref = group_a)
+
+  dds <- DESeqDataSetFromMatrix(cts[, sel], md_s, design = ~ group)
+  dds <- dds[rowSums(counts(dds) >= min_count) >= min_samples, ]
+  dds <- DESeq(dds, quiet = TRUE)
+
+  # Shrink the LFCs — stops low-count genes producing huge, unstable fold changes
+  cf  <- resultsNames(dds)[2]
+  res <- lfcShrink(dds, coef = cf, type = "apeglm")
+  raw  <- results(dds, name = cf)          # unshrunken, keeps the Wald stat
+  res$stat <- raw$stat[match(rownames(res), rownames(raw))]
+  
+  as.data.frame(res) %>%
+    rownames_to_column("ensid") %>%
+    left_join(gene_info, by = "ensid") %>%
+    mutate(
+      contrast = paste0(group_b, "_vs_", group_a),
+      sig = case_when(
+        is.na(padj)                                ~ "NS",
+        padj < PADJ_CUT & log2FoldChange >  LFC_CUT ~ "Up",
+        padj < PADJ_CUT & log2FoldChange < -LFC_CUT ~ "Down",
+        TRUE                                       ~ "NS"
+      )
+    ) %>%
+    arrange(padj)
+}
+```
+
+```{r volcano-function}
+#' Volcano plot: shrunken log2FC vs -log10(adjusted p)
+volcano_plot <- function(res_df, title = NULL, n_label = 20,
+                         label_genes = NULL) {
+
+  d <- res_df %>%
+    filter(!is.na(padj)) %>%
+    mutate(negLog10 = -log10(padj))
+
+  # Cap infinite values (padj == 0) so the plot stays readable
+  finite_max <- max(d$negLog10[is.finite(d$negLog10)], na.rm = TRUE)
+  d$negLog10 <- pmin(d$negLog10, finite_max * 1.05)
+
+  # Which genes to label: either an explicit list, or top hits per direction
+  lab <- if (!is.null(label_genes)) {
+    d %>% filter(gene %in% label_genes)
+  } else {
+    d %>% filter(sig != "NS") %>%
+      group_by(sig) %>%
+      slice_max(order_by = negLog10, n = n_label, with_ties = FALSE) %>%
+      ungroup()
+  }
+
+  ggplot(d, aes(log2FoldChange, negLog10)) +
+    geom_point(aes(colour = sig), size = 0.8, alpha = 0.6) +
+    scale_colour_manual(values = c(Up = "#C0392B", Down = "#2471A3", NS = "grey75"),
+                        name = NULL) +
+    geom_vline(xintercept = c(-LFC_CUT, LFC_CUT), linetype = "dashed",
+               colour = "grey40", linewidth = 0.3) +
+    geom_hline(yintercept = -log10(PADJ_CUT), linetype = "dashed",
+               colour = "grey40", linewidth = 0.3) +
+    geom_text_repel(data = lab, aes(label = gene), size = 2.6,
+                    max.overlaps = Inf, box.padding = 0.3,
+                    segment.size = 0.2, min.segment.length = 0) +
+    labs(
+      title = title %||% unique(res_df$contrast),
+      subtitle = sprintf("padj < %g and |log2FC| > %g:  %d up, %d down",
+                         PADJ_CUT, LFC_CUT,
+                         sum(res_df$sig == "Up"), sum(res_df$sig == "Down")),
+      x = expression(log[2]~fold~change),
+      y = expression(-log[10]~adjusted~italic(P))
+    ) +
+    theme_bw(base_size = 11) +
+    theme(legend.position = "right",
+          panel.grid.minor = element_blank())
+}
+```
+
+# 5. Key comparisons: parental vs each drug-tolerant model (baseline state)
+
+Each drug-tolerant model's untreated (`Ctrl`) samples against parental `Ctrl`.
+This asks: what is constitutively rewired in the tolerant line, independent of
+acute drug exposure?
+
+```{r contrasts}
+reference <- "Par_Ctrl"
+
+dtp_ctrl_groups <- meta %>%
+  filter(treatment == "Ctrl", model != "Par") %>%
+  pull(group) %>% unique() %>% as.character() %>% sort()
+
+dtp_ctrl_groups
+```
+
+```{r run-contrasts, results='hide'}
+#BiocManager::install("apeglm", ask = FALSE, update = FALSE)
+de_list <- setNames(
+  lapply(dtp_ctrl_groups, function(g) run_de(group_b = g, group_a = reference)),
+  dtp_ctrl_groups
+)
+
+# Write each result table out
+invisible(lapply(names(de_list), function(g) {
+  write_tsv(de_list[[g]],
+            file.path(out_dir, paste0("DE_", g, "_vs_", reference, ".tsv")))
+}))
+```
+
+```{r de-summary}
+# How many hits per comparison
+summary_tbl <- map_dfr(de_list, function(d) {
+  tibble(contrast = unique(d$contrast),
+         up       = sum(d$sig == "Up"),
+         down     = sum(d$sig == "Down"),
+         tested   = nrow(d))
+})
+knitr::kable(summary_tbl)
+```
+
+```{r volcanoes, fig.width=7.5, fig.height=6, results='asis'}
+for (g in names(de_list)) {
+  cat("\n\n## ", g, " vs ", reference, "\n\n", sep = "")
+  p <- volcano_plot(de_list[[g]])
+  print(p)
+  ggsave(file.path(out_dir, paste0("volcano_", g, "_vs_", reference, ".pdf")),
+         p, width = 5, height = 4)
+}
+```
+
+```{r}
+"lfcSE" %in% names(de_list[[1]])                    # both have this
+names(de_list[[1]])
+print(run_de)
+```
+
+```{r top-table}
+# Top 25 genes for one comparison, as an example
+knitr::kable(
+  de_list[["RMC3_Ctrl"]] %>%
+    filter(sig != "NS") %>%
+    slice_head(n = 25) %>%
+    select(gene, ensid, chr, baseMean, log2FoldChange, padj, sig),
+  digits = 3
+)
+```
+
+# 6. Overlap across models
+
+Genes changed in the same direction across several tolerant lines are more
+likely to be a shared tolerance programme than a clone-specific artefact.
+
+```{r overlap, fig.width=8, fig.height=5}
+sig_long <- map_dfr(de_list, ~ filter(.x, sig != "NS")) %>%
+  select(contrast, gene, ensid, log2FoldChange, padj, sig)
+
+recurrent <- sig_long %>%
+  count(gene, sig, name = "n_models") %>%
+  filter(n_models >= 4) %>%
+  arrange(desc(n_models))
+
+knitr::kable(head(recurrent, 25))
+write_tsv(recurrent, file.path(out_dir, "recurrent_genes_across_DTP_models.tsv"))
+
+sig_long 
+
+sig_long %>%
+  write.csv("A427_RNAseq_output.csv")
+```
+
+```{r heatmap-recurrent, fig.width=8, fig.height=9}
+# Heatmap of shrunken LFCs for the most recurrent genes
+top_recurrent <- head(unique(recurrent$gene), 25)
+
+lfc_wide <- sig_long %>%
+  bind_rows(map_dfr(de_list, ~ filter(.x, gene %in% top_recurrent))) %>%
+  distinct(contrast, gene, .keep_all = TRUE) %>%
+  filter(gene %in% top_recurrent) %>%
+  select(contrast, gene, log2FoldChange) %>%
+  pivot_wider(names_from = contrast, values_from = log2FoldChange) %>%
+  column_to_rownames("gene") %>%
+  as.matrix()
+
+lfc_wide[is.na(lfc_wide)] <- 0
+
+pheatmap(
+  lfc_wide,
+  color        = colorRampPalette(rev(brewer.pal(11, "RdBu")))(255),
+  breaks       = seq(-4, 4, length.out = 256),
+  fontsize_row = 6,
+  fontsize_col = 8,
+  main         = "log2FC vs parental control, recurrently changed genes"
+)
+```
+```{r}
+#replicates - heatmap
+top_recurrent <- head(unique(recurrent$gene), 25)
+
+# Map symbols back to ensid (VST matrix is keyed on ensid)
+ids <- gene_info %>%
+  filter(gene %in% top_recurrent, ensid %in% rownames(vsd_mat)) %>%
+  distinct(gene, .keep_all = TRUE)        # drop duplicate symbols
+
+# Show the untreated samples only — that's what the contrasts compared
+samps <- meta$sample[meta$treatment == "Ctrl"]
+samps <- samps[order(meta[samps, "model"] != "Par",   # parental block first
+                     meta[samps, "model"],
+                     meta[samps, "replicate"])]
+
+expr <- vsd_mat[ids$ensid, samps, drop = FALSE]
+rownames(expr) <- ids$gene
+
+# Centre each gene on the mean of the parental control replicates,
+# so values are log2 difference from parental — comparable to the LFC version
+par_samples <- meta$sample[meta$group == "Par_Ctrl"]
+expr_c <- expr - rowMeans(expr[, par_samples, drop = FALSE])
+
+ann_col <- meta[samps, c("model", "treatment"), drop = FALSE]
+
+pheatmap(
+  expr_c,
+  color            = colorRampPalette(rev(brewer.pal(11, "RdBu")))(255),
+  breaks           = seq(-4, 4, length.out = 256),
+  annotation_col   = ann_col,
+  cluster_cols     = FALSE,                       # keep replicates grouped
+  gaps_col         = cumsum(table(droplevels(meta[samps, "model"]))),
+  show_colnames    = TRUE,
+  fontsize_row     = 7,
+  fontsize_col     = 7,
+  main             = "VST expression vs parental control mean, per replicate"
+)
+```
+
+```{r}
+# Rank within each direction: recurrence first, effect size as tiebreak
+recurrent_dir <- sig_long %>%
+  group_by(gene, sig) %>%
+  summarise(n_models = n(), mean_lfc = mean(log2FoldChange), .groups = "drop")
+
+top_up <- recurrent_dir %>%
+  filter(sig == "Up") %>%
+  arrange(desc(n_models), desc(mean_lfc)) %>%
+  slice_head(n = 5)
+
+top_up
+
+top_dn <- recurrent_dir %>%
+  filter(sig == "Down") %>%
+  arrange(desc(n_models), mean_lfc) %>%
+  slice_head(n = 5)
+
+sel <- c(top_up$gene, top_dn$gene)      # up block first, then down block
+
+# Map symbols to ensid, then restore the up/down ordering
+ids <- gene_info %>%
+  filter(gene %in% sel, ensid %in% rownames(vsd_mat)) %>%
+  distinct(gene, .keep_all = TRUE)
+ids <- ids[match(sel, ids$gene), ]
+ids <- ids[!is.na(ids$ensid), ]         # drop any lost to the VST pre-filter
+
+samps <- meta$sample[meta$treatment == "Ctrl"]
+samps <- samps[order(meta[samps, "model"] != "Par",
+                     meta[samps, "model"],
+                     meta[samps, "replicate"])]
+
+expr <- vsd_mat[ids$ensid, samps, drop = FALSE]
+rownames(expr) <- ids$gene
+
+par_samples <- meta$sample[meta$group == "Par_Ctrl"]
+expr_c <- expr - rowMeans(expr[, par_samples, drop = FALSE])
+
+ann_col <- meta[samps, c("model", "treatment"), drop = FALSE]
+
+# Row gap sits after however many "up" genes actually survived the mapping
+n_up <- sum(ids$gene %in% top_up$gene)
+
+pheatmap(
+  expr_c,
+  color            = colorRampPalette(rev(brewer.pal(11, "RdBu")))(255),
+  breaks           = seq(-4, 4, length.out = 256),
+  annotation_col   = ann_col,
+  cluster_cols     = FALSE,
+  cluster_rows     = FALSE,              # keep the up/down grouping
+  gaps_col         = cumsum(table(droplevels(meta[samps, "model"]))),
+  gaps_row         = n_up,
+  show_colnames    = TRUE,
+  fontsize_row     = 8,
+  fontsize_col     = 8,
+  main             = "Top 5 up / top 5 down vs parental control"
+)
+```
+```{r}
+#save the object
+pheatmap(
+  expr_c,
+  color            = colorRampPalette(rev(brewer.pal(11, "RdBu")))(255),
+  breaks           = seq(-4, 4, length.out = 256),
+  annotation_col   = ann_col,
+  cluster_cols     = FALSE,
+  cluster_rows     = FALSE,              # keep the up/down grouping
+  gaps_col         = cumsum(table(droplevels(meta[samps, "model"]))),
+  gaps_row         = n_up,
+  show_colnames    = TRUE,
+  fontsize_row     = 8,
+  fontsize_col     = 8,
+  main             = "Relative RNA expression (VST, log2 scale)",
+   filename         = file.path(out_dir, "heatmap_recurrent_replicates.pdf"),
+  width            = 7,
+  height           = 6
+)
+```
+# 7. Optional: acute drug response within each model
+
+The same machinery, comparing drug-treated vs control *within* a model. Useful
+if you want to ask whether the tolerant lines still mount a transcriptional
+response to the drug.
+
+```{r within-model, eval=FALSE}
+# Example: acute RMC in the RMC3 line
+res_rmc3_drug <- run_de(group_b = "RMC3_RMC", group_a = "RMC3_Ctrl")
+volcano_plot(res_rmc3_drug)
+
+# Example: acute RMC in the parental line, for comparison
+res_par_drug  <- run_de(group_b = "Par_RMC",  group_a = "Par_Ctrl")
+volcano_plot(res_par_drug)
+```
+
+```{r within-model, eval=FALSE}
+# Example: acute MRTX in the MRTX2 line
+res_mrtx1_drug <- run_de(group_b = "MRTX1_MRTX", group_a = "MRTX1_Ctrl")
+volcano_plot(res_mrtx1_drug)
+
+# Example: acute RMC in the parental line, for comparison
+res_par_drug  <- run_de(group_b = "Par_MRTX",  group_a = "Par_Ctrl")
+volcano_plot(res_par_drug)
+```
+
+```{r}
+map_dfr(de_list, ~ filter(.x, gene == "HGF")) %>%
+  select(contrast, baseMean, log2FoldChange, pvalue, padj)
+```
+
+# 9. GSEA: drug-tolerant models vs parental
+
+Gene set enrichment on the same contrasts as section 5. GSEA uses the **whole
+ranked list**, not a filtered significant set — that is what distinguishes it
+from over-representation analysis and why it can detect coordinated shifts in a
+pathway where no single gene passes padj.
+
+```{r gsea-libs}
+ #BiocManager::install(c("fgsea"))
+ #install.packages("msigdbr")
+library(fgsea)
+library(msigdbr)
+```
+
+## 9.1 Gene sets
+
+`msigdbr` ships the MSigDB data inside the package, so this works on a cluster
+node with no internet.
+
+```{r gsea-sets}
+# msigdbr renamed its arguments/columns at v10 (category -> collection,
+# gs_cat -> gs_collection). This pulls everything once and adapts either way.
+msig <- msigdbr(species = "Homo sapiens")
+
+cat_col <- if ("gs_collection" %in% names(msig)) "gs_collection" else "gs_cat"
+sub_col <- if ("gs_subcollection" %in% names(msig)) "gs_subcollection" else "gs_subcat"
+
+make_pathways <- function(collection, subcollection = NULL) {
+  d <- msig[msig[[cat_col]] == collection, ]
+  if (!is.null(subcollection)) d <- d[d[[sub_col]] == subcollection, ]
+  split(d$gene_symbol, d$gs_name)
+}
+
+# Hallmark: 50 well-curated sets, the sensible default for a first pass
+pw_hallmark <- make_pathways("H")
+
+# Optional extras — Reactome is broader but noisier, C6 is oncogenic signatures
+pw_reactome <- make_pathways("C2", "CP:REACTOME")
+pw_onco     <- make_pathways("C6")
+
+length(pw_hallmark)
+```
+
+## 9.2 Building the ranked list
+
+The metric determines what GSEA sees. Options, in rough order of preference:
+
+- `stat` — the Wald statistic. Combines effect size and precision in one number.
+  Best default.
+- `signed_p` — `sign(log2FC) * -log10(pvalue)`. Use if `stat` isn't available.
+  Behaves similarly but saturates when p-values hit the floor.
+- `lfc` — shrunken log2 fold change. Effect-size driven, ignores how well
+  each gene was measured. Reasonable, but noisier sets can dominate.
+
+Never rank by unshrunken raw fold change — low-count genes with wild ratios end
+up at both extremes of the list, which is exactly where GSEA weights hardest.
+
+```{r gsea-ranks}
+build_ranks <- function(res_df, metric = c("stat", "signed_p", "lfc")) {
+  metric <- match.arg(metric)
+
+  d <- res_df %>%
+    filter(!is.na(gene), gene != "", !is.na(pvalue))
+
+  d$score <- switch(metric,
+    stat     = d$stat,
+    signed_p = sign(d$log2FoldChange) * -log10(d$pvalue),
+    lfc      = d$log2FoldChange
+  )
+
+  d <- d %>% filter(is.finite(score))
+
+  # Duplicate gene symbols (several ensids per symbol) must be collapsed —
+  # fgsea needs a named vector with unique names. Keep the strongest signal.
+  d <- d %>%
+    group_by(gene) %>%
+    slice_max(order_by = abs(score), n = 1, with_ties = FALSE) %>%
+    ungroup()
+
+  setNames(d$score, d$gene) %>% sort(decreasing = TRUE)
+}
+
+# Check the metric exists before relying on it
+if (!"stat" %in% names(de_list[[1]])) {
+  warning("No 'stat' column - see the run_de edit, or use metric = 'signed_p'")
+}
+
+ranks_list <- lapply(de_list, build_ranks, metric = "stat")
+
+# Sanity check on one contrast
+head(ranks_list[[1]], 5)
+tail(ranks_list[[1]], 5)
+length(ranks_list[[1]])
+```
+
+## 9.3 Run fgsea across all models
+
+```{r gsea-run}
+run_gsea <- function(ranks, pathways, label, min_size = 15, max_size = 500) {
+  set.seed(42)                       # fgsea is stochastic; fix for reproducibility
+  fgsea(
+    pathways = pathways,
+    stats    = ranks,
+    minSize  = min_size,
+    maxSize  = max_size,
+    eps      = 0                     # allow p-values below the default floor
+  ) %>%
+    as_tibble() %>%
+    mutate(contrast = label) %>%
+    arrange(padj)
+}
+
+gsea_list <- imap(ranks_list, ~ run_gsea(.x, pw_hallmark, .y))
+
+# leadingEdge is a list column - flatten before writing to disk
+write_gsea <- function(g, file) {
+  g %>%
+    mutate(leadingEdge = map_chr(leadingEdge, paste, collapse = ",")) %>%
+    write_tsv(file)
+}
+
+invisible(imap(gsea_list, ~ write_gsea(
+  .x, file.path(out_dir, paste0("GSEA_hallmark_", .y, "_vs_", reference, ".tsv"))
+)))
+
+# Top sets for one model
+gsea_list[[1]] %>%
+  select(pathway, NES, pval, padj, size) %>%
+  head(15) %>%
+  knitr::kable(digits = 4)
+```
+
+## 9.4 NES across all models
+
+The useful view: which pathways move in the same direction across independent
+tolerant lines. A set enriched in one clone could be clonal drift; one enriched
+in five is a programme.
+
+```{r gsea-heatmap, fig.width=9, fig.height=10}
+gsea_all <- bind_rows(gsea_list)
+
+# Keep sets significant in at least two models, to cut the matrix down
+keep_sets <- gsea_all %>%
+  filter(padj < 0.05) %>%
+  count(pathway) %>%
+  filter(n >= 2) %>%
+  pull(pathway)
+
+nes_mat <- gsea_all %>%
+  filter(pathway %in% keep_sets) %>%
+  mutate(pathway = str_remove(pathway, "^HALLMARK_") %>% str_replace_all("_", " ")) %>%
+  select(pathway, contrast, NES) %>%
+  pivot_wider(names_from = contrast, values_from = NES) %>%
+  column_to_rownames("pathway") %>%
+  as.matrix()
+
+nes_mat[is.na(nes_mat)] <- 0        # not tested / filtered out
+
+# Star the cells that were individually significant
+star_mat <- gsea_all %>%
+  filter(pathway %in% keep_sets) %>%
+  mutate(pathway = str_remove(pathway, "^HALLMARK_") %>% str_replace_all("_", " "),
+         lab = if_else(!is.na(padj) & padj < 0.05, "*", "")) %>%
+  select(pathway, contrast, lab) %>%
+  pivot_wider(names_from = contrast, values_from = lab) %>%
+  column_to_rownames("pathway") %>%
+  as.matrix()
+star_mat[is.na(star_mat)] <- ""
+star_mat <- star_mat[rownames(nes_mat), colnames(nes_mat), drop = FALSE]
+
+pheatmap(
+  nes_mat,
+  display_numbers = star_mat,
+  number_color    = "black",
+  color           = colorRampPalette(rev(brewer.pal(11, "RdBu")))(255),
+  breaks          = seq(-3, 3, length.out = 256),
+  fontsize_row    = 8,
+  fontsize_col    = 9,
+  main            = "Hallmark NES vs parental control  (* padj < 0.05)"
+)
+```
+
+## 9.5 Barplot for a single model
+
+```{r gsea-bar, fig.width=8, fig.height=6}
+plot_gsea_bar <- function(g, n = 15, padj_cut = 0.05) {
+  d <- g %>%
+    filter(padj < padj_cut) %>%
+    slice_max(abs(NES), n = n, with_ties = FALSE) %>%
+    mutate(pathway = str_remove(pathway, "^HALLMARK_") %>% str_replace_all("_", " "),
+           dir = if_else(NES > 0, "Up in model", "Down in model"))
+
+  ggplot(d, aes(x = NES, y = reorder(pathway, NES), fill = dir)) +
+    geom_col() +
+    scale_fill_manual(values = c("Up in model" = "#C0392B",
+                                 "Down in model" = "#2471A3"), name = NULL) +
+    labs(x = "Normalised enrichment score", y = NULL,
+         title = paste("Hallmark GSEA:", unique(g$contrast))) +
+    theme_bw(base_size = 10)
+}
+
+plot_gsea_bar(gsea_list[["RMC3_Ctrl"]])
+```
+
+## 9.6 Enrichment plot for one pathway
+
+The classic running-score curve. Useful for checking whether a hit is driven by
+a coherent block of genes or by a handful at one extreme.
+
+```{r gsea-enrich, fig.width=7, fig.height=4}
+plotEnrichment(
+  pw_hallmark[["HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION"]],
+  ranks_list[["RMC3_Ctrl"]]
+) +
+  labs(title = "EMT hallmark, RMC3 vs parental")
+```
+
+## 9.7 Leading edge genes
+
+The subset actually driving each enrichment — the sensible starting point for
+picking candidates to validate.
+
+```{r gsea-leading}
+gsea_all %>%
+  filter(padj < 0.05) %>%
+  slice_max(abs(NES), n = 5) %>%
+  transmute(contrast, pathway,
+            NES = round(NES, 2), padj = signif(padj, 3),
+            leading_edge = map_chr(leadingEdge, ~ paste(head(.x, 12), collapse = ", "))) %>%
+  knitr::kable()
+```
+
+
+# 10. Session info
+
+```{r session}
+sessionInfo()
+```
