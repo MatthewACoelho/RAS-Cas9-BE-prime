@@ -52,6 +52,116 @@ lib <-
   lib %>%
   rename(id = "ID")
 ```
+```{r}
+#extract off_targets from the sensor library
+off_targets <- as_tibble(read.csv("PE_data_long.csv", stringsAsFactors = FALSE, header = TRUE))
+gRNAs <- as_tibble(read.csv("pegRNA_Twist_12k_170926.csv", stringsAsFactors = FALSE, header = TRUE))
+
+off_targets <-
+off_targets %>%
+  select(id, gene, exact, mm1, mm2) %>%
+  distinct()
+
+gRNAs <-
+gRNAs %>%
+  select(id, gene, gRNA)
+
+KRAS_offtargets <-
+  left_join(off_targets, gRNAs) %>%
+  filter(gene == "KRAS") %>%
+  distinct() %>%
+    select(!id) %>%
+  arrange(desc(exact))
+
+KRAS_offtargets <-
+KRAS_offtargets %>%
+  rename(Gene = gene) %>%
+  distinct()
+```
+
+```{r}
+#join the library to the off-targets
+lib <- lib %>%
+  mutate(gRNA = str_sub(Spacer, 2, 20))
+
+lib <- 
+  left_join(lib, KRAS_offtargets)
+
+lib %>%
+  count(exact, Gene)
+
+#this is a gRNA for the G12D allele in A427
+lib %>%
+  filter(exact == 0) %>%
+  select(Gene, exact, gRNA) %>%
+  distinct()
+
+ lib %>%
+  filter(is.na(exact)) %>%
+  select(Gene, exact, mm1, mm2, gRNA) %>%
+  filter(Gene == "KRAS") %>%
+  distinct()
+ 
+lib %>%
+  filter(is.na(exact)) %>%
+  select(Gene, exact, mm1, mm2, gRNA) %>%
+  filter(Gene == "KRAS") %>%
+  distinct() %>%
+  write.csv("extra_gRNAs.csv")
+
+lib
+```
+```{r}
+#read in annotations of off-targets
+annotations <- as_tibble(read.csv("extra_gRNAs_annotation_21.09.26.csv", stringsAsFactors = FALSE, header = TRUE))
+
+lib
+
+annotations
+
+lib <-
+  left_join(lib, annotations)
+
+  
+lib %>%
+  filter(is.na(exact)) %>%
+  select(exact, exact_manual, mm1, mm1_manual, mm2, mm2_manual, gRNA)
+
+lib <-
+lib %>%
+  mutate(exact = ifelse(is.na(exact), exact_manual, exact)) %>%
+    mutate(mm1 = ifelse(is.na(mm1), mm1_manual, mm1)) %>%
+      mutate(mm2 = ifelse(is.na(mm2), mm2_manual, mm2))
+
+lib %>%
+  filter(is.na(exact)) %>%
+  select(exact, exact_manual, mm1, mm1_manual, mm2, mm2_manual, gRNA)
+```
+```{r}
+#clean up columns
+lib %>%
+  filter(is.na(exact)) %>%
+  select(exact, exact_manual, mm1, mm1_manual, mm2, mm2_manual, gRNA)
+
+lib <- lib %>%
+  select(!c(exact_manual, mm1_manual, mm2_manual))
+
+lib
+```
+
+```{r}
+#get rid of training bases in the Extension sequence
+lib <-
+  lib %>%
+  mutate(Extension_correct = substr(Extension, 5, nchar(Extension))) 
+
+lib <-
+  lib %>%
+  mutate(Extension.RC_correct = substr(Extension.RC, 1, nchar(Extension.RC)-4))
+
+lib %>%
+  write.csv("Supplementary_table_library_KRAS_synprime.csv")
+```
 
 ```{r}
 #synprime screen analysis
@@ -241,8 +351,9 @@ plot4
 
 ```{r}
 #left join reads to the library annotations
+lib
 synprime_df <-
-left_join(synprime_reads, lib)
+left_join(lib, synprime_reads)
 
 synprime_df
 ```
@@ -689,60 +800,6 @@ ggplot(roc_data, aes(x = 1 - specificity, y = sensitivity)) +
 ggsave("ROC1.eps", width = 4.5, height = 4.5, path ="./figures_export")
 ```
 
-```{r}
-#DEPLETION vs synonymous
-df <- synprime_df %>%
-  mutate(
-    class = case_when(
-      mutation_type == "nonsense" & Gene == "KRAS" &  AA.number < 75 ~ "positive",
-      mutation_type %in% c("synonymous") ~ "negative",
-      TRUE ~ NA_character_
-    ),
-    class = factor(class, levels = c("positive", "negative")) # order matters for yardstick
-  ) %>%
-  filter(!is.na(class))
-
-df <- df %>% mutate(score = -L2FC_A427_PE_SYN_Control_average_zscore)
-
-# n counts per group
-n_counts <- df %>% count(class)
-n_pos <- n_counts %>% filter(class == "positive") %>% pull(n)
-n_neg <- n_counts %>% filter(class == "negative") %>% pull(n)
-
-roc_data <- df %>%
-  roc_curve(truth = class, score, event_level = "first")
-
-auc_val <- df %>%
-  roc_auc(truth = class, score, event_level = "first")
-
-auc_val
-
-annotation_label <- paste0(
-  "AUC = ", round(auc_val$.estimate, 3), "\n",
-  "n(nonsense) = ", n_pos, "\n",
-  "n(synonymous) = ", n_neg
-)
-
-ggplot(roc_data, aes(x = 1 - specificity, y = sensitivity)) +
-  geom_path(color = "salmon", linewidth = 0.5) +
-  geom_abline(lty = 3, color = "gray50") +
-  annotate(
-    "text",
-    x = 0.6, y = 0.4,
-    label = annotation_label,
-    hjust = 0, vjust = 0,
-    size = 3.5
-  ) +
-  coord_equal() +
-  labs(
-    title = "ROC: \nKRAS nonsense vs. synonymous pegRNAs",
-    x = "1 - specificity (FPR)",
-    y = "sensitivity (TPR)"
-  ) +
-  theme_minimal() +
-  theme(plot.title = element_text(size = 11.5))
-ggsave("ROC2.eps", width = 4.5, height = 4.5, path ="./figures_export")
-```
 
 ```{r}
 #RESISTANCE - ROC versus NT
@@ -853,226 +910,7 @@ ggplot(pr_data, aes(x = recall, y = precision)) +
 ggsave("PRC3.eps", width = 4.5, height = 4.5, path ="./figures_export")
 ```
 
-```{r}
-#RESISTANCE - ROC versus synonymous
-df <- synprime_df %>%
-  mutate(
-    class = case_when(
-      mutation_type == "missense" & Gene == "KRAS" &  AA.number %in% c("71", "64") ~ "positive",
-      mutation_type %in% c("synonymous") ~ "negative",
-      TRUE ~ NA_character_
-    ),
-    class = factor(class, levels = c("positive", "negative")) # order matters for yardstick
-  ) %>%
-  filter(!is.na(class))
 
-df <- df %>% mutate(score = L2FC_A427_PE_SYN_RMC6236_average_zscore)
-
-# n counts per group
-n_counts <- df %>% count(class)
-n_pos <- n_counts %>% filter(class == "positive") %>% pull(n)
-n_neg <- n_counts %>% filter(class == "negative") %>% pull(n)
-
-roc_data <- df %>%
-  roc_curve(truth = class, score, event_level = "first")
-
-auc_val <- df %>%
-  roc_auc(truth = class, score, event_level = "first")
-
-auc_val
-
-annotation_label <- paste0(
-  "AUROC = ", round(auc_val$.estimate, 3), "\n",
-  "n(missense) = ", n_pos, "\n",
-  "n(synonymous) = ", n_neg
-)
-
-ggplot(roc_data, aes(x = 1 - specificity, y = sensitivity)) +
-  geom_path(color = "salmon", linewidth = 0.5) +
-  geom_abline(lty = 3, color = "gray50") +
-  annotate(
-    "text",
-    x = 0.6, y = 0.4,
-    label = annotation_label,
-    hjust = 0, vjust = 0,
-    size = 3.5
-  ) +
-  coord_equal() +
-  labs(
-    title = "ROC: \nKRAS 64/71 missense vs. synonymous pegRNAs",
-    x = "1 - specificity (FPR)",
-    y = "sensitivity (TPR)"
-  ) +
-  theme_minimal() +
-    theme(plot.title = element_text(size = 11.5))
-ggsave("ROC4.eps", width = 4.5, height = 4.5, path ="./figures_export")
-```
-```{r}
-#RESISTANCE - PRC versus synonymous
-df <- synprime_df %>%
-  mutate(
-    class = case_when(
-      mutation_type == "missense" & Gene == "KRAS" &  AA.number %in% c("71", "64") ~ "positive",
-      mutation_type %in% c("synonymous") ~ "negative",
-      TRUE ~ NA_character_
-    ),
-    class = factor(class, levels = c("positive", "negative")) # order matters for yardstick
-  ) %>%
-  filter(!is.na(class))
-df <- df %>% mutate(score = L2FC_A427_PE_SYN_RMC6236_average_zscore)
-
-# n counts per group
-n_counts <- df %>% count(class)
-n_pos <- n_counts %>% filter(class == "positive") %>% pull(n)
-n_neg <- n_counts %>% filter(class == "negative") %>% pull(n)
-
-pr_data <- df %>%
-  pr_curve(truth = class, score, event_level = "first")
-pr_auc_val <- df %>%
-  pr_auc(truth = class, score, event_level = "first")
-pr_auc_val
-
-baseline_precision <- n_pos / (n_pos + n_neg)
-
-annotation_label <- paste0(
-  "AUPRC = ", round(pr_auc_val$.estimate, 3), "\n",
-  "n(missense) = ", n_pos, "\n",
-  "n(synonymous) = ", n_neg
-)
-
-df %>%
-  filter(class == "positive") %>%
-  select(Mutation)
-
-ggplot(pr_data, aes(x = recall, y = precision)) +
-  geom_path(color = "steelblue", linewidth = 0.5) +
-  geom_hline(yintercept = baseline_precision, lty = 3, color = "gray50") +
-  annotate(
-    "text",
-    x = 0.2, y = 0.4,
-    label = annotation_label,
-    hjust = 0, vjust = 0,
-    size = 3.5
-  ) +
-  coord_equal() +
-  labs(
-    title = "PRC: \nKRAS 64/71 missense vs. synonymous pegRNAs",
-    x = "recall (sensitivity)",
-    y = "precision (PPV)"
-  ) +
-  theme_minimal() +
-    theme(plot.title = element_text(size = 11.5))
-ggsave("PRC4.eps", width = 4.5, height = 4.5, path ="./figures_export")
-```
-
-```{r}
-#RESISTANCE - ROC versus synonymous
-df <- synprime_df %>%
-  mutate(
-    class = case_when(
-      mutation_type == "missense" & Gene == "KRAS" &  AA.number == 12 ~ "positive",
-      mutation_type %in% c("synonymous") ~ "negative",
-      TRUE ~ NA_character_
-    ),
-    class = factor(class, levels = c("positive", "negative")) # order matters for yardstick
-  ) %>%
-  filter(!is.na(class))
-
-df <- df %>% mutate(score = L2FC_A427_PE_SYN_MRTX1133_average_zscore)
-
-# n counts per group
-n_counts <- df %>% count(class)
-n_pos <- n_counts %>% filter(class == "positive") %>% pull(n)
-n_neg <- n_counts %>% filter(class == "negative") %>% pull(n)
-
-roc_data <- df %>%
-  roc_curve(truth = class, score, event_level = "first")
-
-auc_val <- df %>%
-  roc_auc(truth = class, score, event_level = "first")
-
-auc_val
-
-annotation_label <- paste0(
-  "AUROC = ", round(auc_val$.estimate, 3), "\n",
-  "n(missense) = ", n_pos, "\n",
-  "n(synonymous) = ", n_neg
-)
-
-ggplot(roc_data, aes(x = 1 - specificity, y = sensitivity)) +
-  geom_path(color = "salmon", linewidth = 0.5) +
-  geom_abline(lty = 3, color = "gray50") +
-  annotate(
-    "text",
-    x = 0.6, y = 0.4,
-    label = annotation_label,
-    hjust = 0, vjust = 0,
-    size = 3.5
-  ) +
-  coord_equal() +
-  labs(
-    title = "ROC: \nKRAS G12 missense vs. synonymous pegRNAs",
-    x = "1 - specificity (FPR)",
-    y = "sensitivity (TPR)"
-  ) +
-  theme_minimal() +
-    theme(plot.title = element_text(size = 11.5))
-ggsave("ROC5.eps", width = 4.5, height = 4.5, path ="./figures_export")
-```
-
-```{r}
-#RESISTANCE - PRC versus synonymous
-df <- synprime_df %>%
-  mutate(
-    class = case_when(
-      mutation_type == "missense" & Gene == "KRAS" &  AA.number == 12 ~ "positive",
-      mutation_type %in% c("synonymous") ~ "negative",
-      TRUE ~ NA_character_
-    ),
-    class = factor(class, levels = c("positive", "negative")) # order matters for yardstick
-  ) %>%
-  filter(!is.na(class))
-df <- df %>% mutate(score = L2FC_A427_PE_SYN_MRTX1133_average_zscore)
-
-# n counts per group
-n_counts <- df %>% count(class)
-n_pos <- n_counts %>% filter(class == "positive") %>% pull(n)
-n_neg <- n_counts %>% filter(class == "negative") %>% pull(n)
-
-pr_data <- df %>%
-  pr_curve(truth = class, score, event_level = "first")
-pr_auc_val <- df %>%
-  pr_auc(truth = class, score, event_level = "first")
-pr_auc_val
-
-baseline_precision <- n_pos / (n_pos + n_neg)
-
-annotation_label <- paste0(
-  "AUPRC = ", round(pr_auc_val$.estimate, 3), "\n",
-  "n(missense) = ", n_pos, "\n",
-  "n(synonymous) = ", n_neg
-)
-
-ggplot(pr_data, aes(x = recall, y = precision)) +
-  geom_path(color = "steelblue", linewidth = 0.5) +
-  geom_hline(yintercept = baseline_precision, lty = 3, color = "gray50") +
-  annotate(
-    "text",
-    x = 0.2, y = 0.4,
-    label = annotation_label,
-    hjust = 0, vjust = 0,
-    size = 3.5
-  ) +
-  coord_equal() +
-  labs(
-    title = "PRC: \nKRAS G12 missense vs. synonymous pegRNAs",
-    x = "recall (sensitivity)",
-    y = "precision (PPV)"
-  ) +
-  theme_minimal() +
-    theme(plot.title = element_text(size = 11.5))
-ggsave("PRC5.eps", width = 4.5, height = 4.5, path ="./figures_export")
-```
 
 ```{r}
 #RESISTANCE - ROC versus non-targeting
@@ -1427,8 +1265,8 @@ plot7
 #make a dot plot graph of resistance mutations - put data into long format - reshape
 df_long_zscore <- 
   synprime_df %>%
-  select(id, Gene, AA.number, Name, Mutation, mutation_type, L2FC_A427_PE_SYN_Control_average_zscore, L2FC_A427_PE_SYN_BI2865_average_zscore, L2FC_A427_PE_SYN_ACBI3_average_zscore, L2FC_A427_PE_SYN_RMC6236_average_zscore, L2FC_A427_PE_SYN_MRTX1133_average_zscore) %>%
-  pivot_longer(!c(id, Gene, AA.number, Name, Mutation, mutation_type), names_to = "drug", values_to = "z_score") %>%
+  select(id, Gene, AA.number, Name, Mutation, mutation_type, exact, mm1, mm2, L2FC_A427_PE_SYN_Control_average_zscore, L2FC_A427_PE_SYN_BI2865_average_zscore, L2FC_A427_PE_SYN_ACBI3_average_zscore, L2FC_A427_PE_SYN_RMC6236_average_zscore, L2FC_A427_PE_SYN_MRTX1133_average_zscore) %>%
+  pivot_longer(!c(id, Gene, AA.number, Name, Mutation, mutation_type, exact, mm1, mm2), names_to = "drug", values_to = "z_score") %>%
   distinct()
 
 #rename columns to join to sensor data
@@ -1496,6 +1334,7 @@ plot1 <-
 plot1
 #ggsave("Fig3_dots_1.eps", width = 17.5, height = 4.5, path ="./figures_export")
 ```
+
 ```{r}
 #KRAS Y64 pegRNAs for validation
 df_long %>% 
@@ -1537,6 +1376,8 @@ left_join(df_long, MAGeCK)
 
 ```{r}
 #write a supplementary table
+df_long
+
 df_long %>%
   write.csv("KRAS_synprime_supplementary_table.csv", row.names = FALSE)
 ```
