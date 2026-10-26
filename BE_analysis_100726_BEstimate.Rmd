@@ -205,7 +205,7 @@ data <- mutate(data, A427_ABE_ACBI3_average_reads = average(A427_ABE_ACBI3I_R1_r
 data <- mutate(data, A427_ABE_BI_average_reads = average(A427_ABE_BI_R1_reads, A427_ABE_BI_R2_reads))
 data <- mutate(data, A427_ABE_RMC_average_reads = average(A427_ABE_RMC_R1_reads, A427_ABE_RMC_R3_reads))
 data <- mutate(data, A427_ABE_MRTX_average_reads = average(A427_ABE_MRTX_R1a_reads, A427_ABE_MRTX_R3_reads))
-data <- mutate(data, A427_ABE_T0_average_reads = average_3(A427_ABE_T0_R1_reads, A427_ABE_T0_R1_reads, A427_ABE_T0_R3_reads))
+data <- mutate(data, A427_ABE_T0_average_reads = average_3(A427_ABE_T0_R1_reads, A427_ABE_T0_R2_reads, A427_ABE_T0_R3_reads))
 data <- mutate(data, A427_ABE_CTRL_average_reads = average_3(A427_ABE_Ctrl_R1_reads, A427_ABE_Ctrl_R2_reads, A427_ABE_Ctrl_R3_reads))
 ```
 
