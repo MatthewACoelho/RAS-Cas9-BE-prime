@@ -151,6 +151,7 @@ ggplot(lib, aes(x = reorder(sample, total), y = total / 1e6, fill = model)) +
   theme_bw(base_size = 8)
 ```
 
+
 # 3. DESeq2 object and global QC
 
 For QC (correlation, PCA) I fit one object over all samples. The actual
@@ -173,6 +174,78 @@ dds_all <- dds_all[keep, ]
 
 # Variance-stabilising transform for all distance/correlation/PCA work
 vsd <- vst(dds_all, blind = TRUE)
+```
+
+```{r}
+# Genes detected per sample 
+colSums(counts_mat > 0)
+
+#HGF check
+hgf_id <- gene_info$ensid[gene_info$gene == "HGF"]
+hgf_id                                  # should be ENSG00000019991
+
+# Raw counts, ordered by model then replicate
+raw_hgf <- counts_mat[hgf_id, meta$sample]
+data.frame(
+  sample     = meta$sample,
+  model      = meta$model,
+  treatment  = meta$treatment,
+  raw_count  = raw_hgf
+)
+
+dds_all <- estimateSizeFactors(dds_all)
+norm_hgf <- counts(dds_all, normalized = TRUE)[hgf_id, meta$sample]
+
+hgf_tbl <- data.frame(
+  sample    = meta$sample,
+  model     = meta$model,
+  treatment = meta$treatment,
+  libsize_M = round(colSums(counts_mat)[meta$sample] / 1e6, 1),
+  raw       = raw_hgf,
+  norm      = round(norm_hgf, 1)
+)
+hgf_tbl[order(hgf_tbl$model, hgf_tbl$treatment), ]
+
+ggplot(hgf_tbl[hgf_tbl$treatment == "Ctrl", ],
+       aes(x = model, y = norm, colour = model)) +
+  geom_point(size = 3) +
+  labs(y = "HGF, normalised counts", x = NULL) +
+  theme_bw() + theme(legend.position = "none")
+```
+```{r}
+#MET check
+met_id <- gene_info$ensid[gene_info$gene == "MET"]
+met_id                                  
+
+# Raw counts, ordered by model then replicate
+raw_met <- counts_mat[met_id, meta$sample]
+data.frame(
+  sample     = meta$sample,
+  model      = meta$model,
+  treatment  = meta$treatment,
+  raw_count  = raw_met
+)
+
+dds_all <- estimateSizeFactors(dds_all)
+norm_met <- counts(dds_all, normalized = TRUE)[met_id, meta$sample]
+
+met_tbl <- data.frame(
+  sample    = meta$sample,
+  model     = meta$model,
+  treatment = meta$treatment,
+  libsize_M = round(colSums(counts_mat)[meta$sample] / 1e6, 1),
+  raw       = raw_met,
+  norm      = round(norm_met, 1)
+)
+met_tbl[order(met_tbl$model, met_tbl$treatment), ]
+
+ggplot(met_tbl[met_tbl$treatment == "Ctrl", ],
+       aes(x = model, y = norm, colour = model)) +
+  geom_point(size = 3) +
+  labs(y = "MET, normalised counts", x = NULL) +
+  theme_bw() + theme(legend.position = "none")
+
+#all express MET and the resistance clones mostly overexpress MET versus parental
 ```
 
 ## 3.1 Replicate correlation heatmap
@@ -572,16 +645,17 @@ pheatmap(
   breaks           = seq(-4, 4, length.out = 256),
   annotation_col   = ann_col,
   cluster_cols     = FALSE,
-  cluster_rows     = FALSE,              # keep the up/down grouping
+  cluster_rows     = FALSE,
   gaps_col         = cumsum(table(droplevels(meta[samps, "model"]))),
   gaps_row         = n_up,
   show_colnames    = TRUE,
   fontsize_row     = 8,
   fontsize_col     = 8,
+  border_color     = NA,
   main             = "Relative RNA expression (VST, log2 scale)",
-   filename         = file.path(out_dir, "heatmap_recurrent_replicates.pdf"),
-  width            = 7,
-  height           = 6
+  filename         = file.path(out_dir, "heatmap_recurrent_replicates.pdf"),
+  width            = 6,
+  height           = 4.5
 )
 ```
 # 7. Optional: acute drug response within each model
@@ -595,18 +669,56 @@ response to the drug.
 res_rmc3_drug <- run_de(group_b = "RMC3_RMC", group_a = "RMC3_Ctrl")
 volcano_plot(res_rmc3_drug)
 
+# Example: acute RMC in the RMC2 line
+res_rmc2_drug <- run_de(group_b = "RMC2_RMC", group_a = "RMC2_Ctrl")
+volcano_plot(res_rmc2_drug)
+
 # Example: acute RMC in the parental line, for comparison
 res_par_drug  <- run_de(group_b = "Par_RMC",  group_a = "Par_Ctrl")
 volcano_plot(res_par_drug)
 ```
 
 ```{r within-model, eval=FALSE}
-# Example: acute MRTX in the MRTX2 line
+# Example: acute MRTX in the MRTX1 line
 res_mrtx1_drug <- run_de(group_b = "MRTX1_MRTX", group_a = "MRTX1_Ctrl")
 volcano_plot(res_mrtx1_drug)
 
-# Example: acute RMC in the parental line, for comparison
+# Example: acute MRTX in the MRTX3 line
+res_mrtx3_drug <- run_de(group_b = "MRTX3_MRTX", group_a = "MRTX3_Ctrl")
+volcano_plot(res_mrtx3_drug)
+ggsave("volcano_MRTX3_res.pdf", width = 5, height = 4, path =out_dir)
+
+# Example: acute MRTX in the parental line, for comparison
 res_par_drug  <- run_de(group_b = "Par_MRTX",  group_a = "Par_Ctrl")
+volcano_plot(res_par_drug)
+ggsave("volcano_par_MRTX.pdf", width = 5, height = 4, path =out_dir)
+```
+
+```{r within-model, eval=FALSE}
+# Example: acute BI in the BI1 line
+res_bi1_drug <- run_de(group_b = "BI1_BI", group_a = "BI1_Ctrl")
+volcano_plot(res_bi1_drug)
+
+res_bi2_drug <- run_de(group_b = "BI2_BI", group_a = "BI2_Ctrl")
+volcano_plot(res_bi2_drug)
+
+# Example: acute BI in the parental line, for comparison
+res_par_drug  <- run_de(group_b = "Par_BI",  group_a = "Par_Ctrl")
+volcano_plot(res_par_drug)
+
+res_par_drug %>%
+  count(sig)
+```
+```{r within-model, eval=FALSE}
+# Example: acute ACBI3 in the ACBI31 line
+res_acbi31_drug <- run_de(group_b = "ACBI31_ACBI3", group_a = "ACBI31_Ctrl")
+volcano_plot(res_acbi31_drug)
+
+res_acbi32_drug <- run_de(group_b = "ACBI32_ACBI3", group_a = "ACBI32_Ctrl")
+volcano_plot(res_acbi32_drug)
+
+# Example: acute BI in the parental line, for comparison
+res_par_drug  <- run_de(group_b = "Par_ACBI3",  group_a = "Par_Ctrl")
 volcano_plot(res_par_drug)
 ```
 
@@ -816,7 +928,14 @@ plot_gsea_bar <- function(g, n = 15, padj_cut = 0.05) {
     theme_bw(base_size = 10)
 }
 
+plot_gsea_bar(gsea_list[["MRTX1_Ctrl"]])
+plot_gsea_bar(gsea_list[["MRTX3_Ctrl"]])
+plot_gsea_bar(gsea_list[["RMC2_Ctrl"]])
 plot_gsea_bar(gsea_list[["RMC3_Ctrl"]])
+plot_gsea_bar(gsea_list[["BI1_Ctrl"]])
+plot_gsea_bar(gsea_list[["BI2_Ctrl"]])
+plot_gsea_bar(gsea_list[["ACBI31_Ctrl"]])
+plot_gsea_bar(gsea_list[["ACBI32_Ctrl"]])
 ```
 
 ## 9.6 Enrichment plot for one pathway
@@ -827,9 +946,9 @@ a coherent block of genes or by a handful at one extreme.
 ```{r gsea-enrich, fig.width=7, fig.height=4}
 plotEnrichment(
   pw_hallmark[["HALLMARK_EPITHELIAL_MESENCHYMAL_TRANSITION"]],
-  ranks_list[["RMC3_Ctrl"]]
+  ranks_list[["RMC2_Ctrl"]]
 ) +
-  labs(title = "EMT hallmark, RMC3 vs parental")
+  labs(title = "EMT hallmark, RMC2 vs parental")
 ```
 
 ## 9.7 Leading edge genes
